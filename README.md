@@ -1,5 +1,7 @@
 # keras_bert_easy
 ## 做最好用的keras bert接口
+
+
 即将更新以下几点：  
 1、可以不用传入config.json  
 2、可以不用传入vocab.txt  
