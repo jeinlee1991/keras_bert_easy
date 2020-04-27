@@ -35,6 +35,7 @@ def get_model(token_num,
               feed_forward_activation='gelu',
               training=True,
               trainable=None,
+              training_bert=False,
               output_layer_num=1,
               use_task_embed=False,
               task_num=10,
@@ -73,6 +74,9 @@ def get_model(token_num,
         trainable = training
     if adapter_units is None:
         adapter_units = max(1, embed_dim // 100)
+
+    if not training:
+        dropout_rate = 0
 
     def _trainable(_layer):
         if isinstance(trainable, (list, tuple, set)):
@@ -125,7 +129,7 @@ def get_model(token_num,
         adapter_units=adapter_units,
         adapter_activation=gelu,
     )
-    if training:
+    if training_bert:
         mlm_dense_layer = keras.layers.Dense(
             units=embed_dim,
             activation=feed_forward_activation,
@@ -171,7 +175,7 @@ def get_model(token_num,
             transformed = keras.layers.Concatenate(name='Encoder-Output')(list(reversed(outputs)))
         else:
             transformed = outputs[0]
-        return inputs, transformed
+        return model
 
 
 def compile_model(model,

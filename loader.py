@@ -67,9 +67,6 @@ def build_model_from_config(config_file=None,
         trainable=trainable,
         output_layer_num=output_layer_num,
         **kwargs)
-    if not training:
-        inputs, outputs = model
-        model = keras.models.Model(inputs=inputs, outputs=outputs)
     return model, config
 
 
