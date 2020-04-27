@@ -91,7 +91,7 @@ def load_model_weights_from_checkpoint(model,
         loader('bert/embeddings/word_embeddings'),
     ])
     model.get_layer(name='Embedding-Position').set_weights([
-        loader('bert/embeddings/position_embeddings')[:config['max_position_embeddings'], :],
+        loader('bert/embeddings/position_embeddings'),
     ])
     model.get_layer(name='Embedding-Segment').set_weights([
         loader('bert/embeddings/token_type_embeddings'),
@@ -156,7 +156,7 @@ def load_trained_model_from_checkpoint(checkpoint_file,
                                        training=False,
                                        trainable=None,
                                        output_layer_num=1,
-                                       seq_len=int(1e9),
+                                       seq_len=None,
                                        **kwargs):
     """Load trained official model from checkpoint.
 
