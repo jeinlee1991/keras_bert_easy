@@ -1,3 +1,4 @@
+import os
 import json
 import codecs
 import numpy as np
@@ -19,11 +20,15 @@ def checkpoint_loader(checkpoint_file):
     return _loader
 
 
-def build_model_from_config(config_file,
+def get_default_config_file():
+    return os.path.abspath(os.path.dirname(__file__)) + '/configs/bert/bert_config.json'
+
+
+def build_model_from_config(config_file=None,
                             training=False,
                             trainable=None,
                             output_layer_num=1,
-                            seq_len=int(1e9),
+                            seq_len=None,
                             **kwargs):
     """Build the model from config file.
 
@@ -37,10 +42,16 @@ def build_model_from_config(config_file,
                     position embeddings will be sliced to fit the new length.
     :return: model and config
     """
+    if not config_file:
+        config_file = get_default_config_file()
     with open(config_file, 'r') as reader:
         config = json.loads(reader.read())
+
     if seq_len is not None:
-        config['max_position_embeddings'] = seq_len = min(seq_len, config['max_position_embeddings'])
+        if seq_len > config['max_position_embeddings']:
+            raise ValueError('seq_len must not be greater than %s, got %s'%
+                             (config['max_position_embeddings'], seq_len))
+
     if trainable is None:
         trainable = training
     model = get_model(
@@ -140,8 +151,8 @@ def load_model_weights_from_checkpoint(model,
         ])
 
 
-def load_trained_model_from_checkpoint(config_file,
-                                       checkpoint_file,
+def load_trained_model_from_checkpoint(checkpoint_file,
+                                       config_file=None,
                                        training=False,
                                        trainable=None,
                                        output_layer_num=1,
@@ -160,6 +171,9 @@ def load_trained_model_from_checkpoint(config_file,
                     position embeddings will be sliced to fit the new length.
     :return: model
     """
+    if not config_file:
+        config_file = get_default_config_file()
+
     model, config = build_model_from_config(
         config_file,
         training=training,

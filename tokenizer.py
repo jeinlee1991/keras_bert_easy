@@ -1,11 +1,21 @@
+import os
+import codecs
 import unicodedata
 from keras_bert.bert import TOKEN_CLS, TOKEN_SEP, TOKEN_UNK
 
 
-class Tokenizer(object):
+def load_token_dict(vocab_path):
+    token_dict = {}
+    with codecs.open(vocab_path, 'r', 'utf8') as reader:
+        for line in reader:
+            token = line.strip()
+            token_dict[token] = len(token_dict)
+    return token_dict
 
+
+class Tokenizer(object):
     def __init__(self,
-                 token_dict,
+                 vocab_path=None,
                  token_cls=TOKEN_CLS,
                  token_sep=TOKEN_SEP,
                  token_unk=TOKEN_UNK,
@@ -13,13 +23,16 @@ class Tokenizer(object):
                  cased=False):
         """Initialize tokenizer.
 
-        :param token_dict: A dict maps tokens to indices.
+        :param vocab_path: vocab of tokens.
         :param token_cls: The token represents classification.
         :param token_sep: The token represents separator.
         :param token_unk: The token represents unknown token.
         :param pad_index: The index to pad.
         :param cased: Whether to keep the case.
         """
+        if not vocab_path:
+            vocab_path = os.path.abspath(os.path.dirname(__file__)) + '/configs/bert/vocab.txt'
+        token_dict = load_token_dict(vocab_path)
         self._token_dict = token_dict
         self._token_dict_inv = {v: k for k, v in token_dict.items()}
         self._token_cls = token_cls
