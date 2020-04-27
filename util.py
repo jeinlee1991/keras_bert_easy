@@ -9,7 +9,7 @@ import numpy as np
 from .backend import keras
 from .backend import backend as K
 from .layers import Extract, MaskedGlobalMaxPool1D
-from .loader import load_trained_model_from_checkpoint, load_vocabulary
+from .loader import build_pretrained_model, load_vocabulary
 from .tokenizer import Tokenizer
 
 __all__ = [
@@ -55,7 +55,7 @@ def extract_embeddings_generator(model,
     """
     if isinstance(model, (str, type(u''))):
         paths = get_checkpoint_paths(model)
-        model = load_trained_model_from_checkpoint(
+        model = build_pretrained_model(
             config_file=paths.config,
             checkpoint_file=paths.checkpoint,
             output_layer_num=output_layer_num,

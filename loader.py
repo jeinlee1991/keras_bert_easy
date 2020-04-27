@@ -9,7 +9,7 @@ from .bert import get_model
 __all__ = [
     'build_model_from_config',
     'load_model_weights_from_checkpoint',
-    'load_trained_model_from_checkpoint',
+    'build_pretrained_model',
     'load_vocabulary',
 ]
 
@@ -151,15 +151,14 @@ def load_model_weights_from_checkpoint(model,
         ])
 
 
-def load_trained_model_from_checkpoint(checkpoint_file,
-                                       config_file=None,
-                                       training=False,
-                                       trainable=None,
-                                       output_layer_num=1,
-                                       seq_len=None,
-                                       **kwargs):
-    """Load trained official model from checkpoint.
-
+def build_pretrained_model(checkpoint_file=None,
+                           config_file=None,
+                           training=False,
+                           trainable=None,
+                           output_layer_num=1,
+                           seq_len=None,
+                           **kwargs):
+    """
     :param config_file: The path to the JSON configuration file.
     :param checkpoint_file: The path to the checkpoint files, should end with '.ckpt'.
     :param training: If training, the whole model will be returned.
@@ -181,7 +180,9 @@ def load_trained_model_from_checkpoint(checkpoint_file,
         output_layer_num=output_layer_num,
         seq_len=seq_len,
         **kwargs)
-    load_model_weights_from_checkpoint(model, config, checkpoint_file, training=training)
+
+    if checkpoint_file:
+        load_model_weights_from_checkpoint(model, config, checkpoint_file, training=training)
     return model
 
 
