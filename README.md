@@ -3,6 +3,7 @@
 
 
 即将更新以下几点：  
+
 1、可以不用传入config.json  
 2、可以不用传入vocab.txt  
 3、可以自由传入seq_len参数，支持训练和推理的seq_len不同（keras_bert不支持）  
