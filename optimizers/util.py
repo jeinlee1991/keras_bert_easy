@@ -1,4 +1,4 @@
-from keras_bert.backend import TF_KERAS
+from backend import TF_KERAS
 
 __all__ = ['AdamWarmup', 'calc_train_steps']
 
