@@ -2,11 +2,12 @@ import numpy as np
 import tensorflow as tf
 import keras
 
-
+import keras.activations
 try:
     from . import layerwiseLR
 except:
     import layerwiseLR
+import keras.backend as K
 
 
 def test_keras_Adam_2lr():

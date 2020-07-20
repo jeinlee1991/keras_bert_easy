@@ -1,11 +1,10 @@
 import numpy as np
-from keras_pos_embd import PositionEmbedding
-from keras_layer_normalization import LayerNormalization
-from keras_transformer import get_encoders
-from keras_transformer import get_custom_objects as get_encoder_custom_objects
-from .backend import keras
+
+from .transformer import get_encoders
+from .transformer import get_custom_objects as get_encoder_custom_objects
 from .activations import gelu
-from .layers import get_inputs, get_embedding, TokenEmbedding, EmbeddingSimilarity, Masked, Extract, TaskEmbedding
+from .layers import *
+from .backend import keras
 from .optimizers import AdamWarmup
 
 
@@ -23,6 +22,87 @@ TOKEN_SEP = '[SEP]'  # Token for separation
 TOKEN_MASK = '[MASK]'  # Token for masking
 
 
+class Extract(keras.layers.Layer):
+    """Extract from index.
+
+    See: https://arxiv.org/pdf/1810.04805.pdf
+    """
+
+    def __init__(self, index, **kwargs):
+        super(Extract, self).__init__(**kwargs)
+        self.index = index
+        self.supports_masking = True
+
+    def get_config(self):
+        config = {
+            'index': self.index,
+        }
+        base_config = super(Extract, self).get_config()
+        return dict(list(base_config.items()) + list(config.items()))
+
+    def compute_output_shape(self, input_shape):
+        return input_shape[:1] + input_shape[2:]
+
+    def compute_mask(self, inputs, mask=None):
+        return None
+
+    def call(self, x, mask=None):
+        return x[:, self.index]
+
+
+class Masked(keras.layers.Layer):
+    """Generate output mask based on the given mask.
+
+    The inputs for the layer is the original input layer and the masked locations.
+
+    See: https://arxiv.org/pdf/1810.04805.pdf
+    """
+
+    def __init__(self,
+                 return_masked=False,
+                 **kwargs):
+        """Initialize the layer.
+
+        :param return_masked: Whether to return the merged mask.
+        :param kwargs: Arguments for parent class.
+        """
+        super(Masked, self).__init__(**kwargs)
+        self.supports_masking = True
+        self.return_masked = return_masked
+
+    def get_config(self):
+        config = {'return_masked': self.return_masked,}
+        base_config = super(Masked, self).get_config()
+        return dict(list(base_config.items()) + list(config.items()))
+
+    def compute_output_shape(self, input_shape):
+        if self.return_masked:
+            return [input_shape[0], input_shape[0][:-1]]
+        return input_shape[0]
+
+    def compute_mask(self, inputs, mask=None):
+        token_mask = K.not_equal(inputs[1], 0)
+        masked = K.all(K.stack([token_mask, mask[0]], axis=0), axis=0)
+        if self.return_masked:
+            return [masked, None]
+        return masked
+
+    def call(self, inputs, mask=None, **kwargs):
+        output = inputs[0] + 0
+        if self.return_masked:
+            return [output, K.cast(self.compute_mask(inputs, mask)[0], K.floatx())]
+        return output
+
+
+def get_inputs(seq_len):
+    """Get input layers.
+    See: https://arxiv.org/pdf/1810.04805.pdf
+    :param seq_len: Length of the sequence or None.
+    """
+    names = ['Token', 'Segment', 'Masked']
+    return [keras.layers.Input(shape=(seq_len,), name='Input-%s' % name) for name in names]
+
+
 def get_model(token_num,
               pos_num=512,
               seq_len=512,
@@ -33,14 +113,11 @@ def get_model(token_num,
               dropout_rate=0.1,
               attention_activation=None,
               feed_forward_activation='gelu',
+              mode='finetune',
               training=True,
               trainable=None,
-              training_bert=False,
-              output_layer_num=1,
               use_task_embed=False,
-              task_num=10,
-              use_adapter=False,
-              adapter_units=None):
+              task_num=10):
     """Get BERT model.
 
     See: https://arxiv.org/pdf/1810.04805.pdf
@@ -55,11 +132,10 @@ def get_model(token_num,
     :param dropout_rate: Dropout rate.
     :param attention_activation: Activation for attention layers.
     :param feed_forward_activation: Activation for feed-forward layers.
-    :param training: A built model with MLM and NSP outputs will be returned if it is `True`,
-                     otherwise the input layers and the last feature extraction layer will be returned.
+    :param mode: finetine or pretrain. A built model with MLM and NSP outputs will be returned if it is `pretrain`,
+                otherwise model with transformer output will be returned.
+    :param training: dropout layer will be skipped if it is `True`
     :param trainable: Whether the model is trainable.
-    :param output_layer_num: The number of layers whose outputs will be concatenated as a single output.
-                             Only available when `training` is `False`.
     :param use_task_embed: Whether to add task embeddings to existed embeddings.
     :param task_num: The number of tasks.
     :param use_adapter: Whether to use feed-forward adapters before each residual connections.
@@ -72,8 +148,6 @@ def get_model(token_num,
         feed_forward_activation = gelu
     if trainable is None:
         trainable = training
-    if adapter_units is None:
-        adapter_units = max(1, embed_dim // 100)
 
     if not training:
         dropout_rate = 0
@@ -94,11 +168,9 @@ def get_model(token_num,
         pos_num=pos_num,
         dropout_rate=dropout_rate,
     )
+
     if use_task_embed:
-        task_input = keras.layers.Input(
-            shape=(1,),
-            name='Input-Task',
-        )
+        task_input = keras.layers.Input(shape=(1,), name='Input-Task')
         embed_layer = TaskEmbedding(
             input_dim=task_num,
             output_dim=embed_dim,
@@ -106,17 +178,14 @@ def get_model(token_num,
             name='Embedding-Task',
         )([embed_layer, task_input])
         inputs = inputs[:2] + [task_input, inputs[-1]]
+
     if dropout_rate > 0.0:
-        dropout_layer = keras.layers.Dropout(
-            rate=dropout_rate,
-            name='Embedding-Dropout',
-        )(embed_layer)
+        dropout_layer = keras.layers.Dropout(rate=dropout_rate, name='Embedding-Dropout')(embed_layer)
     else:
         dropout_layer = embed_layer
-    embed_layer = LayerNormalization(
-        trainable=trainable,
-        name='Embedding-Norm',
-    )(dropout_layer)
+
+    embed_layer = LayerNormalization(trainable=trainable, name='Embedding-Norm')(dropout_layer)
+
     transformed = get_encoders(
         encoder_num=transformer_num,
         input_layer=embed_layer,
@@ -125,11 +194,9 @@ def get_model(token_num,
         attention_activation=attention_activation,
         feed_forward_activation=feed_forward_activation,
         dropout_rate=dropout_rate,
-        use_adapter=use_adapter,
-        adapter_units=adapter_units,
-        adapter_activation=gelu,
     )
-    if training_bert:
+
+    if mode=='pretrain':
         mlm_dense_layer = keras.layers.Dense(
             units=embed_dim,
             activation=feed_forward_activation,
@@ -139,20 +206,13 @@ def get_model(token_num,
         mlm_pred_layer = EmbeddingSimilarity(name='MLM-Sim')([mlm_norm_layer, embed_weights])
         masked_layer = Masked(name='MLM')([mlm_pred_layer, inputs[-1]])
         extract_layer = Extract(index=0, name='Extract')(transformed)
-        nsp_dense_layer = keras.layers.Dense(
-            units=embed_dim,
-            activation='tanh',
-            name='NSP-Dense',
-        )(extract_layer)
-        nsp_pred_layer = keras.layers.Dense(
-            units=2,
-            activation='softmax',
-            name='NSP',
-        )(nsp_dense_layer)
+        nsp_dense_layer = keras.layers.Dense(units=embed_dim, activation='tanh', name='NSP-Dense')(extract_layer)
+        nsp_pred_layer = keras.layers.Dense(units=2, activation='softmax', name='NSP')(nsp_dense_layer)
         model = keras.models.Model(inputs=inputs, outputs=[masked_layer, nsp_pred_layer])
         for layer in model.layers:
             layer.trainable = _trainable(layer)
         return model
+
     else:
         if use_task_embed:
             inputs = inputs[:3]
@@ -161,20 +221,6 @@ def get_model(token_num,
         model = keras.models.Model(inputs=inputs, outputs=transformed)
         for layer in model.layers:
             layer.trainable = _trainable(layer)
-        if isinstance(output_layer_num, int):
-            output_layer_num = min(output_layer_num, transformer_num)
-            output_layer_num = [-i for i in range(1, output_layer_num + 1)]
-        outputs = []
-        for layer_index in output_layer_num:
-            if layer_index < 0:
-                layer_index = transformer_num + layer_index
-            layer_index += 1
-            layer = model.get_layer(name='Encoder-{}-FeedForward-Norm'.format(layer_index))
-            outputs.append(layer.output)
-        if len(outputs) > 1:
-            transformed = keras.layers.Concatenate(name='Encoder-Output')(list(reversed(outputs)))
-        else:
-            transformed = outputs[0]
         return model
 
 

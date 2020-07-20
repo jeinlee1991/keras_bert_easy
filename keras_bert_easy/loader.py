@@ -27,8 +27,8 @@ def get_default_config_file():
 def build_model_from_config(config_file=None,
                             training=False,
                             trainable=None,
-                            output_layer_num=1,
                             seq_len=None,
+                            mode='finetune',
                             **kwargs):
     """Build the model from config file.
 
@@ -63,9 +63,9 @@ def build_model_from_config(config_file=None,
         head_num=config['num_attention_heads'],
         feed_forward_dim=config['intermediate_size'],
         feed_forward_activation=config['hidden_act'],
+        mode=mode,
         training=training,
         trainable=trainable,
-        output_layer_num=output_layer_num,
         **kwargs)
     return model, config
 
