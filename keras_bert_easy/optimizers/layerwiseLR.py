@@ -8,6 +8,21 @@ import keras
 import keras.backend as K
 
 
+def get_weights_by_layernames(model, layernames, use_tfkeras=False):
+    if use_tfkeras:
+        if not isinstance(model, tf.keras.Model):
+            raise ValueError("the input `model` must be a instance of tf.keras.Model")
+    else:
+        if not isinstance(model, keras.Model):
+            raise ValueError("the input `model` must be a instance of keras.Model")
+
+    weights = []
+    for name in layernames:
+        layer = model.get_layer(name)
+        weights += [weight.name for weight in layer.weights]
+    return weights
+
+
 class keras_Adam_2lr(keras.optimizers.Optimizer):
     """支持2段式学习率的Adam optimizer.
         针对keras编写（切勿使用tf.keras），且要求keras.__version__ <= 2.3.1
@@ -101,6 +116,10 @@ class keras_Adam_2lr(keras.optimizers.Optimizer):
             'amsgrad': self.amsgrad}
         base_config = super(keras_Adam_2lr, self).get_config()
         return dict(list(base_config.items()) + list(config.items()))
+
+    @staticmethod
+    def get_weights_by_layernames(model, layernames):
+        return get_weights_by_layernames(model, layernames, use_tfkeras=False)
 
 
 class tfkeras_Adam_2lr(tfkerasOptimizer):
@@ -196,6 +215,10 @@ class tfkeras_Adam_2lr(tfkerasOptimizer):
             'amsgrad': self.amsgrad}
         base_config = super(tfkeras_Adam_2lr, self).get_config()
         return dict(list(base_config.items()) + list(config.items()))
+
+    @staticmethod
+    def get_weights_by_layernames(model, layernames):
+        return get_weights_by_layernames(model, layernames, use_tfkeras=True)
 
 
 class keras_Adam_3lr(keras.optimizers.Optimizer):
@@ -297,6 +320,10 @@ class keras_Adam_3lr(keras.optimizers.Optimizer):
         base_config = super(keras_Adam_3lr, self).get_config()
         return dict(list(base_config.items()) + list(config.items()))
 
+    @staticmethod
+    def get_weights_by_layernames(model, layernames):
+        return get_weights_by_layernames(model, layernames, use_tfkeras=False)
+
 
 class tfkeras_Adam_3lr(tfkerasOptimizer):
     """支持3段式学习率的Adam optimizer.
@@ -396,6 +423,10 @@ class tfkeras_Adam_3lr(tfkerasOptimizer):
             'amsgrad': self.amsgrad}
         base_config = super(tfkeras_Adam_3lr, self).get_config()
         return dict(list(base_config.items()) + list(config.items()))
+
+    @staticmethod
+    def get_weights_by_layernames(model, layernames):
+        return get_weights_by_layernames(model, layernames, use_tfkeras=True)
 
 
 class keras_Adam_lr_decay(keras.optimizers.Optimizer):
@@ -620,7 +651,7 @@ class tfkeras_Adam_lr_decay(tfkerasOptimizer):
     @staticmethod
     def build_dict_layer_depth(tfkeras_model):
         if not isinstance(tfkeras_model, tf.keras.Model):
-            raise ValueError("the input `keras_model` must be a instance of keras.Model")
+            raise ValueError("the input `tfkeras_model` must be a instance of tf.keras.Model")
 
         weight_name_to_layer_depth = {}
         for i, layer in enumerate(tfkeras_model.layers):
