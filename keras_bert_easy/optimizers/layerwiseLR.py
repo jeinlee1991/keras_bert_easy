@@ -59,14 +59,13 @@ class keras_Adam_2lr(BaseOptimizer):
         lr: float >= 0. List of Learning rates. [Early layers, Final Layers]
         beta_1: float, 0 < beta < 1. Generally close to 1.
         beta_2: float, 0 < beta < 1. Generally close to 1.
-        epsilon: float >= 0. Fuzz factor. If `None`, defaults to `K.epsilon()`.
         amsgrad: boolean. Whether to apply the AMSGrad variant of this
             algorithm from the paper "On the Convergence of Adam and
             Beyond".
     """
 
     def __init__(self, final_layers, lr=(1e-5, 1e-4),
-                 beta_1=0.9, beta_2=0.999, epsilon=None,
+                 beta_1=0.9, beta_2=0.999,
                  weight_decay=0, # 0.01
                  exclude_from_weight_decay=("LayerNorm", "layer_norm", "bias"),
                  amsgrad=False, **kwargs):
@@ -82,13 +81,11 @@ class keras_Adam_2lr(BaseOptimizer):
             self.beta_1 = K.variable(beta_1, name='beta_1')
             self.beta_2 = K.variable(beta_2, name='beta_2')
 
-            self.final_layers = final_layers
-
-        if epsilon is None:
-            epsilon = K.epsilon()
-        self.epsilon = epsilon
+        self.final_layers = final_layers
         self.weight_decay = weight_decay
         self.exclude_from_weight_decay = exclude_from_weight_decay
+
+        self.epsilon = kwargs.pop('epsilon', K.epsilon())
         self.amsgrad = amsgrad
 
     def get_updates(self, loss, params):
@@ -153,7 +150,6 @@ class keras_Adam_2lr(BaseOptimizer):
             'lr': (K.get_value(self.lrate)),
             'beta_1': float(K.get_value(self.beta_1)),
             'beta_2': float(K.get_value(self.beta_2)),
-            'epsilon': self.epsilon,
             'weight_decay': self.weight_decay,
             'amsgrad': self.amsgrad}
         base_config = super(keras_Adam_2lr, self).get_config()
@@ -172,7 +168,6 @@ class keras_Adam_3lr(BaseOptimizer):
         lr: float >= 0. List of Learning rates. [Early layers, Middle layers, Final Layers]
         beta_1: float, 0 < beta < 1. Generally close to 1.
         beta_2: float, 0 < beta < 1. Generally close to 1.
-        epsilon: float >= 0. Fuzz factor. If `None`, defaults to `K.epsilon()`.
         decay: float >= 0. Learning rate decay over each update.
         amsgrad: boolean. Whether to apply the AMSGrad variant of this
             algorithm from the paper "On the Convergence of Adam and
@@ -181,26 +176,27 @@ class keras_Adam_3lr(BaseOptimizer):
 
     def __init__(self, middle_layers, final_layers, lr=(1e-5, 1e-4, 1e-2),
                  beta_1=0.9, beta_2=0.999,
-                 epsilon=None, decay=0., amsgrad=False, **kwargs):
+                 weight_decay=0,  # 0.01
+                 exclude_from_weight_decay=("LayerNorm", "layer_norm", "bias"),
+                 amsgrad=False, **kwargs):
         super(keras_Adam_3lr, self).__init__(**kwargs)
 
         keras_mode_hint()
+        if weight_decay > 0:
+            print('using optimizer AdamW...')
 
         with K.name_scope(self.__class__.__name__):
             self.iterations = K.variable(0, dtype='int64', name='iterations')
             self.lrate = K.variable(lr, name='lr')
             self.beta_1 = K.variable(beta_1, name='beta_1')
             self.beta_2 = K.variable(beta_2, name='beta_2')
-            self.decay = K.variable(decay, name='decay')
 
-            self.middle_layers = middle_layers
-            self.final_layers = final_layers
-            # print('middle_layers weights:', middle_layers)
-            # print('final_layers weights:', final_layers)
-        if epsilon is None:
-            epsilon = K.epsilon()
-        self.epsilon = epsilon
-        self.initial_decay = decay
+        self.middle_layers = middle_layers
+        self.final_layers = final_layers
+        self.weight_decay = weight_decay
+        self.exclude_from_weight_decay = exclude_from_weight_decay
+
+        self.epsilon = kwargs.pop('epsilon', K.epsilon())
         self.amsgrad = amsgrad
 
     def get_updates(self, loss, params):
@@ -208,10 +204,6 @@ class keras_Adam_3lr(BaseOptimizer):
         self.updates = [K.update_add(self.iterations, 1)]
 
         lr = self.lrate
-        if self.initial_decay > 0:
-            lr = lr * (1. / (1. + self.decay * K.cast(self.iterations,
-                                                      K.dtype(self.decay))))
-
         t = K.cast(self.iterations, K.floatx()) + 1
         lr_t = lr * (K.sqrt(1. - K.pow(self.beta_2, t)) /
                      (1. - K.pow(self.beta_1, t)))
@@ -243,6 +235,17 @@ class keras_Adam_3lr(BaseOptimizer):
             else:
                 p_t = p - lr_grp * m_t / (K.sqrt(v_t) + self.epsilon)
 
+            # weight decay (L2 regularization)
+            # Just adding the square of the weights to the loss function is *not*
+            # the correct way of using L2 regularization/weight decay with Adam,
+            # since that will interact with the m and v parameters in strange ways.
+            # Instead we want ot decay the weights in a manner that doesn't interact
+            # with the m/v parameters. This is equivalent to adding the square
+            # of the weights to the loss with plain (non-momentum) SGD.
+            if self.weight_decay > 0:
+                if do_use_weight_decay(p.name, self.exclude_from_weight_decay):
+                    p_t = p_t - lr_grp * self.weight_decay * p
+
             self.updates.append(K.update(m, m_t))
             self.updates.append(K.update(v, v_t))
             new_p = p_t
@@ -259,8 +262,7 @@ class keras_Adam_3lr(BaseOptimizer):
             'lr': (K.get_value(self.lrate)),
             'beta_1': float(K.get_value(self.beta_1)),
             'beta_2': float(K.get_value(self.beta_2)),
-            'decay': float(K.get_value(self.decay)),
-            'epsilon': self.epsilon,
+            'weight_decay': self.weight_decay,
             'amsgrad': self.amsgrad}
         base_config = super(keras_Adam_3lr, self).get_config()
         return dict(list(base_config.items()) + list(config.items()))
@@ -285,34 +287,37 @@ class keras_Adam_lr_decay(BaseOptimizer):
         lr: float >= 0.  Learning rates.
         beta_1: float, 0 < beta < 1. Generally close to 1.
         beta_2: float, 0 < beta < 1. Generally close to 1.
-        epsilon: float >= 0. Fuzz factor. If `None`, defaults to `K.epsilon()`.
         decay: float >= 0. Learning rate decay over each update.
         amsgrad: boolean. Whether to apply the AMSGrad variant of this
             algorithm from the paper "On the Convergence of Adam and
             Beyond".
     """
 
-    def __init__(self, weight_name_to_layer_depth, n_layers, layerwise_lr_decay_power=0.8,
-                 lr=1e-3, beta_1=0.9, beta_2=0.999,
-                 epsilon=None, decay=0., amsgrad=False, **kwargs):
+    def __init__(self, weight_name_to_layer_depth, n_layers,
+                 layerwise_lr_decay_power=0.8, lr=1e-3,
+                 beta_1=0.9, beta_2=0.999,
+                 weight_decay=0,  # 0.01
+                 exclude_from_weight_decay=("LayerNorm", "layer_norm", "bias"),
+                 amsgrad=False, **kwargs):
         super(keras_Adam_lr_decay, self).__init__(**kwargs)
 
         keras_mode_hint()
+        if weight_decay > 0:
+            print('using optimizer AdamW...')
 
         with K.name_scope(self.__class__.__name__):
             self.iterations = K.variable(0, dtype='int64', name='iterations')
             self.lrate = K.variable(lr, name='lr')
             self.beta_1 = K.variable(beta_1, name='beta_1')
             self.beta_2 = K.variable(beta_2, name='beta_2')
-            self.decay = K.variable(decay, name='decay')
 
         self.weight_name_to_layer_depth = weight_name_to_layer_depth
         self.n_layers = n_layers
         self.layerwise_lr_decay_power = layerwise_lr_decay_power
-        if epsilon is None:
-            epsilon = K.epsilon()
-        self.epsilon = epsilon
-        self.initial_decay = decay
+        self.weight_decay = weight_decay
+        self.exclude_from_weight_decay = exclude_from_weight_decay
+
+        self.epsilon = kwargs.pop('epsilon', K.epsilon())
         self.amsgrad = amsgrad
 
     def get_updates(self, loss, params):
@@ -320,10 +325,6 @@ class keras_Adam_lr_decay(BaseOptimizer):
         self.updates = [K.update_add(self.iterations, 1)]
 
         lr = self.lrate
-        if self.initial_decay > 0:
-            lr = lr * (1. / (1. + self.decay * K.cast(self.iterations,
-                                                      K.dtype(self.decay))))
-
         t = K.cast(self.iterations, K.floatx()) + 1
         lr_t = lr * (K.sqrt(1. - K.pow(self.beta_2, t)) /
                      (1. - K.pow(self.beta_1, t)))
@@ -353,6 +354,17 @@ class keras_Adam_lr_decay(BaseOptimizer):
             else:
                 p_t = p - lr_grp * m_t / (K.sqrt(v_t) + self.epsilon)
 
+            # weight decay (L2 regularization)
+            # Just adding the square of the weights to the loss function is *not*
+            # the correct way of using L2 regularization/weight decay with Adam,
+            # since that will interact with the m and v parameters in strange ways.
+            # Instead we want ot decay the weights in a manner that doesn't interact
+            # with the m/v parameters. This is equivalent to adding the square
+            # of the weights to the loss with plain (non-momentum) SGD.
+            if self.weight_decay > 0:
+                if do_use_weight_decay(p.name, self.exclude_from_weight_decay):
+                    p_t = p_t - lr_grp * self.weight_decay * p
+
             self.updates.append(K.update(m, m_t))
             self.updates.append(K.update(v, v_t))
             new_p = p_t
@@ -369,8 +381,7 @@ class keras_Adam_lr_decay(BaseOptimizer):
             'lr': (K.get_value(self.lrate)),
             'beta_1': float(K.get_value(self.beta_1)),
             'beta_2': float(K.get_value(self.beta_2)),
-            'decay': float(K.get_value(self.decay)),
-            'epsilon': self.epsilon,
+            'weight_decay': self.weight_decay,
             'amsgrad': self.amsgrad}
         base_config = super(keras_Adam_lr_decay, self).get_config()
         return dict(list(base_config.items()) + list(config.items()))

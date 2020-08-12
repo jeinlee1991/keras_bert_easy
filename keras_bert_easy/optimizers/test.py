@@ -2,6 +2,7 @@ import os
 os.environ['TF_KERAS'] = '1'
 import numpy as np
 import tensorflow as tf
+tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.ERROR)
 
 try:
     from . import layerwiseLR
@@ -24,7 +25,7 @@ def test_keras_Adam_2lr():
     x = keras.layers.Dense(10, name='final-layer1')(x)
     output = keras.layers.Dense(1, name='final-layer2')(x)
     model = keras.Model(inpl, output)
-    model.summary()
+    # model.summary()
 
     # get final_layers_weights
     final_layers_names = ['final-layer1', 'final-layer2']
@@ -36,21 +37,22 @@ def test_keras_Adam_2lr():
     # train
     optimizer = layerwiseLR.keras_Adam_2lr(
         final_layers=final_layers_weights,
-        lr=(1e-3, 1e-2)  # early_layers, final_layers 学习率分别设为 1e-3, 1e-2
+        lr=(1e-3, 1e-2),  # early_layers, final_layers 学习率分别设为 1e-3, 1e-2
+        weight_decay=0.01,
     )
     model.compile(
         optimizer=optimizer,
         loss=keras.losses.binary_crossentropy
     )
-    print('model compile done!')
+    # print('model compile done!')
     x_train = np.random.random(size=[100,5])  # data size: 100
     y_train = np.array([1, 0]*50)
-    model.fit(x_train, y_train, epochs=3, verbose=2)
+    model.fit(x_train, y_train, epochs=3, verbose=0)
 
     # test success!
-    print('tf version: ', tf.__version__)
-    print('keras version: ', keras.__version__)
-    print('test_keras_Adam_2lr ok!')
+    # print('tf version: ', tf.__version__)
+    # print('keras version: ', keras.__version__)
+    print('test keras_Adam_2lr ok!')
 
 
 def test_keras_Adam_3lr():
@@ -59,7 +61,6 @@ def test_keras_Adam_3lr():
     # tf 2.x 需要禁掉Eager
     if tf.__version__.startswith('2.'):
         tf.compat.v1.disable_eager_execution()
-        print('disable eager done!')
 
     # get model
     inpl = keras.layers.Input(shape=[5,], name='early-layer1')
@@ -69,7 +70,7 @@ def test_keras_Adam_3lr():
     x = keras.layers.Dense(10, name='final-layer1')(x)
     output = keras.layers.Dense(1, name='final-layer2')(x)
     model = keras.Model(inpl, output)
-    model.summary()
+    # model.summary()
 
     # get middle_layers_weights, final_layers_weights
     middle_layers_names = ['middle-layer1', 'middle-layer2']
@@ -86,20 +87,20 @@ def test_keras_Adam_3lr():
     optimizer = layerwiseLR.keras_Adam_3lr(
         middle_layers=middle_layers_weights,
         final_layers=final_layers_weights,
-        lr=(1e-3, 1e-2, 1e-1)  # early_layers, middle_layers, final_layers 学习率分别设为 1e-3, 1e-2, 1e-1
+        lr=(1e-3, 1e-2, 1e-1),  # early_layers, middle_layers, final_layers 学习率分别设为 1e-3, 1e-2, 1e-1
+        weight_decay=0.01,
     )
     model.compile(
         optimizer=optimizer,
         loss=keras.losses.binary_crossentropy
     )
-    print('model compile done!')
+
     x_train = np.random.random(size=[100,5])  # data size: 100
     y_train = np.array([1, 0]*50)
-    model.fit(x_train, y_train, epochs=3, verbose=2)
+    model.fit(x_train, y_train, epochs=3, verbose=0)
 
     # test success!
-    print('tf version: ', tf.__version__, ', keras version: ', keras.__version__)
-    print('test_keras_Adam_3lr ok!')
+    print('test keras_Adam_3lr ok!')
 
 
 def test_keras_Adam_lr_decay():
@@ -117,16 +118,9 @@ def test_keras_Adam_lr_decay():
     x = keras.layers.Dense(10, name='layer5')(x)
     output = keras.layers.Dense(1, name='layer6')(x)
     model = keras.Model(inpl, output)
-    model.summary()
+    # model.summary()
 
     n_layers = len(model.layers)
-    # weight_name_to_layer_depth = {}
-    # for i, layer in enumerate(model.layers):
-    #     print('layer name: ', layer.name)
-    #     depth = i + 1
-    #     for w in layer.weights:
-    #         print('\t weights name: ', w.name)
-    #         weight_name_to_layer_depth[w.name] = depth
     weight_name_to_layer_depth = layerwiseLR.keras_Adam_lr_decay.build_dict_layer_depth(model)
 
     # train
@@ -134,24 +128,24 @@ def test_keras_Adam_lr_decay():
         weight_name_to_layer_depth=weight_name_to_layer_depth,
         n_layers=n_layers,
         layerwise_lr_decay_power=0.8,  # 学习率逐层衰减的权重
-        lr=1e-3  # 基础学习率，即模型最后一层的学习率，其他层的学习率在此基础上衰减
+        lr=1e-3,  # 基础学习率，即模型最后一层的学习率，其他层的学习率在此基础上衰减
+        weight_decay=0.01,
     )
     model.compile(
         optimizer=optimizer,
         loss=keras.losses.binary_crossentropy
     )
-    print('model compile done!')
+
     x_train = np.random.random(size=[100,5])  # data size: 100
     y_train = np.array([1, 0]*50)
-    model.fit(x_train, y_train, epochs=3, verbose=2)
+    model.fit(x_train, y_train, epochs=3, verbose=0)
 
     # test success!
-    print('tf version: ', tf.__version__, ', keras version: ', keras.__version__)
-    print('test_keras_Adam_lr_decay ok!')
+    print('test keras_Adam_lr_decay ok!')
 
 
 if __name__=='__main__':
-    # test_keras_Adam_2lr()
-    # test_keras_Adam_3lr()
+    test_keras_Adam_2lr()
+    test_keras_Adam_3lr()
     test_keras_Adam_lr_decay()
 
