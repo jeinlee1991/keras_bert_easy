@@ -19,7 +19,8 @@ config_file = os.path.join(pretrained_path, 'bert_config.json')
 
 
 if __name__=='__main__':
-    ids = np.random.randint(0,1000, size=(1,10))
+    # ids = np.random.randint(0,1000, size=(1,10))
+    ids = np.array([[1,2,3,0,0]])
     segs = np.zeros_like(ids)
     tstart = time.perf_counter()
     model = build_pretrained_model(checkpoint_file=checkpoint_file)
@@ -28,12 +29,12 @@ if __name__=='__main__':
     r = model.predict([ids, segs])
     print(r[:,0,0:2])
 
-    tstart = time.perf_counter()
-    model = load_trained_model_from_checkpoint(config_file, checkpoint_file, seq_len=None)
-    print('load ckpt time cost: %.4f' % (time.perf_counter() - tstart))
-    # model.summary()
-    r = model.predict([ids, segs])
-    print(r[:,0,0:2])
+    # tstart = time.perf_counter()
+    # model = load_trained_model_from_checkpoint(config_file, checkpoint_file, seq_len=None)
+    # print('load ckpt time cost: %.4f' % (time.perf_counter() - tstart))
+    # # model.summary()
+    # r = model.predict([ids, segs])
+    # print(r[:,0,0:2])
 
     tstart = time.perf_counter()
     model = build_transformer_model(config_file, checkpoint_file)

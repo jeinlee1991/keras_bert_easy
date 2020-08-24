@@ -1,5 +1,4 @@
-from .backend import keras, initializers, regularizers, constraints
-from .backend import backend as K
+from .backend import keras, K, initializers, regularizers, constraints
 
 
 class LayerNormalization(keras.layers.Layer):

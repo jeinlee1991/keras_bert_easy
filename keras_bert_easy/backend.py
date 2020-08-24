@@ -19,7 +19,6 @@ K = keras.backend
 utils = keras.utils
 activations = keras.activations
 applications = keras.applications
-backend = keras.backend
 datasets = keras.datasets
 layers = keras.layers
 preprocessing = keras.preprocessing
