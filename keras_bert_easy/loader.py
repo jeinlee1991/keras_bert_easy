@@ -1,49 +1,126 @@
 import os
 import json
 import codecs
+import time
+
 import numpy as np
 import tensorflow as tf
-from .backend import keras
+from .backend import keras, K
 from .bert import get_model
 
 __all__ = [
-    'build_model_from_config',
-    'load_model_weights_from_checkpoint',
+    'load_from_ckpt',
     'build_pretrained_model',
     'load_vocabulary',
 ]
 
-
-def checkpoint_loader(checkpoint_file):
-    def _loader(name):
-        return tf.train.load_variable(checkpoint_file, name)
-    return _loader
+here = os.path.abspath(os.path.dirname(__file__))
 
 
-def get_default_config_file():
-    return os.path.abspath(os.path.dirname(__file__)) + '/configs/bert/bert_config.json'
+def get_default_config_file(modelname='bert'):
+    file = here + '/configs/bert/bert_config.json'
+    if modelname=='electra-small':
+        file = here + '/configs/electra-small/electra_small_config.json'
+    return file
 
 
-def build_model_from_config(config_file=None,
-                            training=False,
-                            trainable=None,
-                            seq_len=None,
-                            mode='finetune',
-                            **kwargs):
-    """Build the model from config file.
+def load_from_ckpt(model, config, checkpoint_file, mode='finetune'):
+    """Load trained official model from checkpoint.
 
+    :param model: Built keras model.
+    :param config: Loaded configuration file.
+    :param checkpoint_file: The path to the checkpoint files, should end with '.ckpt'.
+    :param mode: `finetune` or `pretrain`
+    """
+    ckpt_reader = tf.train.load_checkpoint(checkpoint_file)
+    def loader(name):
+        if name.endswith(":0"):
+            name = name[:-2]
+        return ckpt_reader.get_tensor(name)
+
+    # map from keras-layer to ckpt's variable
+    variable_map = {
+        'Embedding-Token': ['bert/embeddings/word_embeddings'],
+        'Embedding-Position': ['bert/embeddings/position_embeddings'],
+        'Embedding-Segment': ['bert/embeddings/token_type_embeddings'],
+        'Embedding-Norm': ['bert/embeddings/LayerNorm/gamma', 'bert/embeddings/LayerNorm/beta'],
+    }
+
+    for i in range(config['num_hidden_layers']):
+        layername = 'Encoder-%d-MultiHeadSelfAttention'%(i + 1)
+        variable_map[layername] = [
+            'bert/encoder/layer_%d/attention/self/query/kernel' % i,
+            'bert/encoder/layer_%d/attention/self/query/bias' % i,
+            'bert/encoder/layer_%d/attention/self/key/kernel' % i,
+            'bert/encoder/layer_%d/attention/self/key/bias' % i,
+            'bert/encoder/layer_%d/attention/self/value/kernel' % i,
+            'bert/encoder/layer_%d/attention/self/value/bias' % i,
+            'bert/encoder/layer_%d/attention/output/dense/kernel' % i,
+            'bert/encoder/layer_%d/attention/output/dense/bias' % i,
+        ]
+        layername = 'Encoder-%d-MultiHeadSelfAttention-Norm'%(i + 1)
+        variable_map[layername] = [
+            'bert/encoder/layer_%d/attention/output/LayerNorm/gamma' % i,
+            'bert/encoder/layer_%d/attention/output/LayerNorm/beta' % i,
+        ]
+        layername = 'Encoder-%d-FeedForward' % (i + 1)
+        variable_map[layername] = [
+            'bert/encoder/layer_%d/intermediate/dense/kernel' % i,
+            'bert/encoder/layer_%d/intermediate/dense/bias' % i,
+            'bert/encoder/layer_%d/output/dense/kernel' % i,
+            'bert/encoder/layer_%d/output/dense/bias' % i,
+        ]
+        layername = 'Encoder-%d-FeedForward-Norm' % (i + 1)
+        variable_map[layername] = [
+            'bert/encoder/layer_%d/output/LayerNorm/gamma' % i,
+            'bert/encoder/layer_%d/output/LayerNorm/beta' % i,
+        ]
+
+    if mode=='pretrain':
+        variable_map['MLM-Dense'] = [
+            'cls/predictions/transform/dense/kernel',
+            'cls/predictions/transform/dense/bias',
+        ]
+        variable_map['MLM-Norm'] = [
+            'cls/predictions/transform/LayerNorm/gamma',
+            'cls/predictions/transform/LayerNorm/beta',
+        ]
+        variable_map['MLM-Sim'] = ['cls/predictions/output_bias']
+        variable_map['NSP-Dense'] = ['bert/pooler/dense/kernel', 'bert/pooler/dense/bias']
+        variable_map['NSP'] = [
+            'cls/seq_relationship/output_weights',
+            'cls/seq_relationship/output_bias'
+        ]
+
+    weights_value_pairs = []
+    for layername, v in variable_map.items():
+        weights = model.get_layer(layername).trainable_weights
+        values = [loader(item) for item in v]
+        if layername == 'NSP':
+            values[0] = np.transpose(values[0])
+        weights_value_pairs += list(zip(weights, values))
+
+    K.batch_set_value(weights_value_pairs)
+
+
+def build_pretrained_model(config_file=None,
+                           checkpoint_file=None,
+                           trainable=True,
+                           seq_len=None,
+                           mode='finetune',
+                           **kwargs):
+    """
     :param config_file: The path to the JSON configuration file.
-    :param training: If training, the whole model will be returned.
-                     Otherwise, the MLM and NSP parts will be ignored.
-    :param trainable: Whether the model is trainable.
-    :param output_layer_num: The number of layers whose outputs will be concatenated as a single output.
-                             Only available when `training` is `False`.
+    :param checkpoint_file: The path to the checkpoint files, should end with '.ckpt'.
+    :param trainable: Whether the model is trainable. The default value is the same with `training`.
     :param seq_len: If it is not None and it is shorter than the value in the config file, the weights in
                     position embeddings will be sliced to fit the new length.
-    :return: model and config
+    :param mode: `finetune` or `pretrain`
+    :return: model
     """
     if not config_file:
-        config_file = get_default_config_file()
+        config_file = get_default_config_file(modelname='bert')
+
     with open(config_file, 'r') as reader:
         config = json.loads(reader.read())
 
@@ -52,8 +129,6 @@ def build_model_from_config(config_file=None,
             raise ValueError('seq_len must not be greater than %s, got %s'%
                              (config['max_position_embeddings'], seq_len))
 
-    if trainable is None:
-        trainable = training
     model = get_model(
         token_num=config['vocab_size'],
         pos_num=config['max_position_embeddings'],
@@ -64,122 +139,11 @@ def build_model_from_config(config_file=None,
         feed_forward_dim=config['intermediate_size'],
         feed_forward_activation=config['hidden_act'],
         mode=mode,
-        training=training,
         trainable=trainable,
-        **kwargs)
-    return model, config
-
-
-def load_model_weights_from_checkpoint(model,
-                                       config,
-                                       checkpoint_file,
-                                       training=False):
-    """Load trained official model from checkpoint.
-
-    :param model: Built keras model.
-    :param config: Loaded configuration file.
-    :param checkpoint_file: The path to the checkpoint files, should end with '.ckpt'.
-    :param training: If training, the whole model will be returned.
-                     Otherwise, the MLM and NSP parts will be ignored.
-    """
-    loader = checkpoint_loader(checkpoint_file)
-
-    model.get_layer(name='Embedding-Token').set_weights([
-        loader('bert/embeddings/word_embeddings'),
-    ])
-    model.get_layer(name='Embedding-Position').set_weights([
-        loader('bert/embeddings/position_embeddings'),
-    ])
-    model.get_layer(name='Embedding-Segment').set_weights([
-        loader('bert/embeddings/token_type_embeddings'),
-    ])
-    model.get_layer(name='Embedding-Norm').set_weights([
-        loader('bert/embeddings/LayerNorm/gamma'),
-        loader('bert/embeddings/LayerNorm/beta'),
-    ])
-    for i in range(config['num_hidden_layers']):
-        try:
-            model.get_layer(name='Encoder-%d-MultiHeadSelfAttention' % (i + 1))
-        except ValueError as e:
-            continue
-        model.get_layer(name='Encoder-%d-MultiHeadSelfAttention' % (i + 1)).set_weights([
-            loader('bert/encoder/layer_%d/attention/self/query/kernel' % i),
-            loader('bert/encoder/layer_%d/attention/self/query/bias' % i),
-            loader('bert/encoder/layer_%d/attention/self/key/kernel' % i),
-            loader('bert/encoder/layer_%d/attention/self/key/bias' % i),
-            loader('bert/encoder/layer_%d/attention/self/value/kernel' % i),
-            loader('bert/encoder/layer_%d/attention/self/value/bias' % i),
-            loader('bert/encoder/layer_%d/attention/output/dense/kernel' % i),
-            loader('bert/encoder/layer_%d/attention/output/dense/bias' % i),
-        ])
-        model.get_layer(name='Encoder-%d-MultiHeadSelfAttention-Norm' % (i + 1)).set_weights([
-            loader('bert/encoder/layer_%d/attention/output/LayerNorm/gamma' % i),
-            loader('bert/encoder/layer_%d/attention/output/LayerNorm/beta' % i),
-        ])
-        model.get_layer(name='Encoder-%d-FeedForward' % (i + 1)).set_weights([
-            loader('bert/encoder/layer_%d/intermediate/dense/kernel' % i),
-            loader('bert/encoder/layer_%d/intermediate/dense/bias' % i),
-            loader('bert/encoder/layer_%d/output/dense/kernel' % i),
-            loader('bert/encoder/layer_%d/output/dense/bias' % i),
-        ])
-        model.get_layer(name='Encoder-%d-FeedForward-Norm' % (i + 1)).set_weights([
-            loader('bert/encoder/layer_%d/output/LayerNorm/gamma' % i),
-            loader('bert/encoder/layer_%d/output/LayerNorm/beta' % i),
-        ])
-    if training:
-        model.get_layer(name='MLM-Dense').set_weights([
-            loader('cls/predictions/transform/dense/kernel'),
-            loader('cls/predictions/transform/dense/bias'),
-        ])
-        model.get_layer(name='MLM-Norm').set_weights([
-            loader('cls/predictions/transform/LayerNorm/gamma'),
-            loader('cls/predictions/transform/LayerNorm/beta'),
-        ])
-        model.get_layer(name='MLM-Sim').set_weights([
-            loader('cls/predictions/output_bias'),
-        ])
-        model.get_layer(name='NSP-Dense').set_weights([
-            loader('bert/pooler/dense/kernel'),
-            loader('bert/pooler/dense/bias'),
-        ])
-        model.get_layer(name='NSP').set_weights([
-            np.transpose(loader('cls/seq_relationship/output_weights')),
-            loader('cls/seq_relationship/output_bias'),
-        ])
-
-
-def build_pretrained_model(checkpoint_file=None,
-                           config_file=None,
-                           training=False,
-                           trainable=None,
-                           output_layer_num=1,
-                           seq_len=None,
-                           **kwargs):
-    """
-    :param config_file: The path to the JSON configuration file.
-    :param checkpoint_file: The path to the checkpoint files, should end with '.ckpt'.
-    :param training: If training, the whole model will be returned.
-                     Otherwise, the MLM and NSP parts will be ignored.
-    :param trainable: Whether the model is trainable. The default value is the same with `training`.
-    :param output_layer_num: The number of layers whose outputs will be concatenated as a single output.
-                             Only available when `training` is `False`.
-    :param seq_len: If it is not None and it is shorter than the value in the config file, the weights in
-                    position embeddings will be sliced to fit the new length.
-    :return: model
-    """
-    if not config_file:
-        config_file = get_default_config_file()
-
-    model, config = build_model_from_config(
-        config_file,
-        training=training,
-        trainable=trainable,
-        output_layer_num=output_layer_num,
-        seq_len=seq_len,
         **kwargs)
 
     if checkpoint_file:
-        load_model_weights_from_checkpoint(model, config, checkpoint_file, training=training)
+        load_from_ckpt(model, config, checkpoint_file, mode=mode)
     return model
 
 

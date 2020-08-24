@@ -114,10 +114,8 @@ def get_model(token_num,
               attention_activation=None,
               feed_forward_activation='gelu',
               mode='finetune',
-              training=True,
-              trainable=None,
-              use_task_embed=False,
-              task_num=10):
+              trainable=True,
+              **kwargs):
     """Get BERT model.
 
     See: https://arxiv.org/pdf/1810.04805.pdf
@@ -136,21 +134,12 @@ def get_model(token_num,
                 otherwise model with transformer output will be returned.
     :param training: dropout layer will be skipped if it is `True`
     :param trainable: Whether the model is trainable.
-    :param use_task_embed: Whether to add task embeddings to existed embeddings.
-    :param task_num: The number of tasks.
-    :param use_adapter: Whether to use feed-forward adapters before each residual connections.
-    :param adapter_units: The dimension of the first transformation in feed-forward adapter.
     :return: The built model.
     """
     if attention_activation == 'gelu':
         attention_activation = gelu
     if feed_forward_activation == 'gelu':
         feed_forward_activation = gelu
-    if trainable is None:
-        trainable = training
-
-    if not training:
-        dropout_rate = 0
 
     def _trainable(_layer):
         if isinstance(trainable, (list, tuple, set)):
@@ -168,16 +157,6 @@ def get_model(token_num,
         pos_num=pos_num,
         dropout_rate=dropout_rate,
     )
-
-    if use_task_embed:
-        task_input = keras.layers.Input(shape=(1,), name='Input-Task')
-        embed_layer = TaskEmbedding(
-            input_dim=task_num,
-            output_dim=embed_dim,
-            mask_zero=False,
-            name='Embedding-Task',
-        )([embed_layer, task_input])
-        inputs = inputs[:2] + [task_input, inputs[-1]]
 
     if dropout_rate > 0.0:
         dropout_layer = keras.layers.Dropout(rate=dropout_rate, name='Embedding-Dropout')(embed_layer)
@@ -214,10 +193,7 @@ def get_model(token_num,
         return model
 
     else:
-        if use_task_embed:
-            inputs = inputs[:3]
-        else:
-            inputs = inputs[:2]
+        inputs = inputs[:2]
         model = keras.models.Model(inputs=inputs, outputs=transformed)
         for layer in model.layers:
             layer.trainable = _trainable(layer)
@@ -256,7 +232,6 @@ def get_custom_objects():
     custom_objects['PositionEmbedding'] = PositionEmbedding
     custom_objects['TokenEmbedding'] = TokenEmbedding
     custom_objects['EmbeddingSimilarity'] = EmbeddingSimilarity
-    custom_objects['TaskEmbedding'] = TaskEmbedding
     custom_objects['Masked'] = Masked
     custom_objects['Extract'] = Extract
     custom_objects['gelu'] = gelu
