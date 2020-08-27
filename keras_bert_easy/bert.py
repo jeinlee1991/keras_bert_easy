@@ -1,17 +1,20 @@
-import numpy as np
+import os
+import json
 
-from .transformer import get_encoders
-from .transformer import get_custom_objects as get_encoder_custom_objects
-from .activations import gelu
+import numpy as np
+import tensorflow as tf
+from tensorflow.python.ops.math_ops import erf, sqrt
+
 from .layers import *
 from .backend import keras
 from .optimizers import AdamWarmup
 
+here = os.path.abspath(os.path.dirname(__file__))
 
 __all__ = [
     'TOKEN_PAD', 'TOKEN_UNK', 'TOKEN_CLS', 'TOKEN_SEP', 'TOKEN_MASK',
-    'gelu', 'get_model', 'compile_model', 'get_base_dict', 'gen_batch_inputs', 'get_token_embedding',
-    'get_custom_objects', 'set_custom_objects',
+    'gelu', 'get_model', 'compile_model', 'get_base_dict',
+    'get_custom_objects', 'set_custom_objects', 'build_pretrained_model',
 ]
 
 
@@ -22,85 +25,76 @@ TOKEN_SEP = '[SEP]'  # Token for separation
 TOKEN_MASK = '[MASK]'  # Token for masking
 
 
-class Extract(keras.layers.Layer):
-    """Extract from index.
+def get_base_dict():
+    """Get basic dictionary containing special tokens."""
+    return {
+        TOKEN_PAD: 0,
+        TOKEN_UNK: 1,
+        TOKEN_CLS: 2,
+        TOKEN_SEP: 3,
+        TOKEN_MASK: 4,
+    }
 
-    See: https://arxiv.org/pdf/1810.04805.pdf
+
+def gelu(x):
+    return 0.5 * x * (1.0 + erf(x / sqrt(2.0)))
+
+
+def get_encoders(input_layer,
+                 encoder_num,
+                 head_num,
+                 intermediate_size,
+                 feed_forward_activation=gelu,
+                 dropout_rate=0.0,):
+    """Get encoders.
+
+    :param encoder_num: Number of encoder components.
+    :param input_layer: Input layer.
+    :param head_num: Number of heads in multi-head self-attention.
+    :param hidden_dim: Hidden dimension of feed forward layer.
+    :param attention_activation: Activation for multi-head self-attention.
+    :param feed_forward_activation: Activation for feed-forward layer.
+    :param dropout_rate: Dropout rate.
+    :param trainable: Whether the layers are trainable.
+    :return: Output layer.
     """
 
-    def __init__(self, index, **kwargs):
-        super(Extract, self).__init__(**kwargs)
-        self.index = index
-        self.supports_masking = True
+    x0 = input_layer
+    for i in range(encoder_num):
+        name = 'Encoder-%d' % (i + 1)
+        attention_name = '%s-MultiHeadSelfAttention' % name
+        feed_forward_name = '%s-FeedForward' % name
 
-    def get_config(self):
-        config = {
-            'index': self.index,
-        }
-        base_config = super(Extract, self).get_config()
-        return dict(list(base_config.items()) + list(config.items()))
+        # attention
+        x = MultiHeadAttention(
+            head_num=head_num,
+            name=attention_name,
+            attention_prob_dropout_rate=dropout_rate
+        )(x0)
+        x = keras.layers.Dropout(
+            rate=dropout_rate,
+            name='%s-Dropout' % attention_name
+        )(x)
+        x = keras.layers.Add(name='%s-Add' % attention_name)([x0, x])
+        x = LayerNormalization(name='%s-Norm' % attention_name)(x)
 
-    def compute_output_shape(self, input_shape):
-        return input_shape[:1] + input_shape[2:]
+        # feedforward
+        x0 = x
+        x = FeedForward(
+            units=intermediate_size,
+            activation=feed_forward_activation,
+            name=feed_forward_name
+        )(x0)
+        x = keras.layers.Dropout(
+            rate=dropout_rate,
+            name='%s-Dropout' % feed_forward_name
+        )(x)
+        x = keras.layers.Add(name='%s-Add' % feed_forward_name)([x0, x])
+        x = LayerNormalization(name='%s-Norm' % feed_forward_name)(x)
 
-    def compute_mask(self, inputs, mask=None):
-        return None
+        x0 = x
 
-    def call(self, x, mask=None):
-        return x[:, self.index]
-
-
-class Masked(keras.layers.Layer):
-    """Generate output mask based on the given mask.
-
-    The inputs for the layer is the original input layer and the masked locations.
-
-    See: https://arxiv.org/pdf/1810.04805.pdf
-    """
-
-    def __init__(self,
-                 return_masked=False,
-                 **kwargs):
-        """Initialize the layer.
-
-        :param return_masked: Whether to return the merged mask.
-        :param kwargs: Arguments for parent class.
-        """
-        super(Masked, self).__init__(**kwargs)
-        self.supports_masking = True
-        self.return_masked = return_masked
-
-    def get_config(self):
-        config = {'return_masked': self.return_masked,}
-        base_config = super(Masked, self).get_config()
-        return dict(list(base_config.items()) + list(config.items()))
-
-    def compute_output_shape(self, input_shape):
-        if self.return_masked:
-            return [input_shape[0], input_shape[0][:-1]]
-        return input_shape[0]
-
-    def compute_mask(self, inputs, mask=None):
-        token_mask = K.not_equal(inputs[1], 0)
-        masked = K.all(K.stack([token_mask, mask[0]], axis=0), axis=0)
-        if self.return_masked:
-            return [masked, None]
-        return masked
-
-    def call(self, inputs, mask=None, **kwargs):
-        output = inputs[0] + 0
-        if self.return_masked:
-            return [output, K.cast(self.compute_mask(inputs, mask)[0], K.floatx())]
-        return output
-
-
-def get_inputs(seq_len):
-    """Get input layers.
-    See: https://arxiv.org/pdf/1810.04805.pdf
-    :param seq_len: Length of the sequence or None.
-    """
-    names = ['Token', 'Segment', 'Masked']
-    return [keras.layers.Input(shape=(seq_len,), name='Input-%s' % name) for name in names]
+    return x0
 
 
 def get_model(token_num,
@@ -109,12 +103,11 @@ def get_model(token_num,
               embed_dim=768,
               transformer_num=12,
               head_num=12,
-              feed_forward_dim=3072,
+              intermediate_size=3072,
               dropout_rate=0.1,
-              attention_activation=None,
               feed_forward_activation='gelu',
-              mode='finetune',
               trainable=True,
+              mode='finetune',
               **kwargs):
     """Get BERT model.
 
@@ -126,51 +119,43 @@ def get_model(token_num,
     :param embed_dim: Dimensions of embeddings.
     :param transformer_num: Number of transformers.
     :param head_num: Number of heads in multi-head attention in each transformer.
-    :param feed_forward_dim: Dimension of the feed forward layer in each transformer.
+    :param intermediate_size: Dimension of the feed forward layer in each transformer.
     :param dropout_rate: Dropout rate.
-    :param attention_activation: Activation for attention layers.
     :param feed_forward_activation: Activation for feed-forward layers.
     :param mode: finetine or pretrain. A built model with MLM and NSP outputs will be returned if it is `pretrain`,
                 otherwise model with transformer output will be returned.
-    :param training: dropout layer will be skipped if it is `True`
     :param trainable: Whether the model is trainable.
     :return: The built model.
     """
-    if attention_activation == 'gelu':
-        attention_activation = gelu
+
     if feed_forward_activation == 'gelu':
         feed_forward_activation = gelu
 
-    def _trainable(_layer):
-        if isinstance(trainable, (list, tuple, set)):
-            for prefix in trainable:
-                if _layer.name.startswith(prefix):
-                    return True
-            return False
-        return trainable
+    inputs = [keras.layers.Input(shape=(seq_len,), name='Input-%s' % name)
+              for name in ['Token', 'Segment', 'Masked']]
 
-    inputs = get_inputs(seq_len=seq_len)
-    embed_layer, embed_weights = get_embedding(
+    x, embed_weights = get_embedding(
         inputs,
         token_num=token_num,
         embed_dim=embed_dim,
         pos_num=pos_num,
-        dropout_rate=dropout_rate,
     )
 
-    if dropout_rate > 0.0:
-        dropout_layer = keras.layers.Dropout(rate=dropout_rate, name='Embedding-Dropout')(embed_layer)
-    else:
-        dropout_layer = embed_layer
+    x = keras.layers.Dropout(
+        rate=dropout_rate,
+        name='Embedding-Dropout'
+    )(x)
 
-    embed_layer = LayerNormalization(trainable=trainable, name='Embedding-Norm')(dropout_layer)
+    x = LayerNormalization(
+        trainable=trainable,
+        name='Embedding-Norm'
+    )(x)
 
-    transformed = get_encoders(
+    x = get_encoders(
+        input_layer=x,
         encoder_num=transformer_num,
-        input_layer=embed_layer,
         head_num=head_num,
-        hidden_dim=feed_forward_dim,
-        attention_activation=attention_activation,
+        intermediate_size=intermediate_size,
         feed_forward_activation=feed_forward_activation,
         dropout_rate=dropout_rate,
     )
@@ -180,23 +165,22 @@ def get_model(token_num,
             units=embed_dim,
             activation=feed_forward_activation,
             name='MLM-Dense',
-        )(transformed)
+        )(x)
         mlm_norm_layer = LayerNormalization(name='MLM-Norm')(mlm_dense_layer)
         mlm_pred_layer = EmbeddingSimilarity(name='MLM-Sim')([mlm_norm_layer, embed_weights])
         masked_layer = Masked(name='MLM')([mlm_pred_layer, inputs[-1]])
-        extract_layer = Extract(index=0, name='Extract')(transformed)
-        nsp_dense_layer = keras.layers.Dense(units=embed_dim, activation='tanh', name='NSP-Dense')(extract_layer)
+        nsp_dense_layer = keras.layers.Dense(units=embed_dim, activation='tanh', name='NSP-Dense')(x[:,0,:])
         nsp_pred_layer = keras.layers.Dense(units=2, activation='softmax', name='NSP')(nsp_dense_layer)
         model = keras.models.Model(inputs=inputs, outputs=[masked_layer, nsp_pred_layer])
         for layer in model.layers:
-            layer.trainable = _trainable(layer)
+            layer.trainable = trainable
         return model
 
     else:
         inputs = inputs[:2]
-        model = keras.models.Model(inputs=inputs, outputs=transformed)
+        model = keras.models.Model(inputs=inputs, outputs=x)
         for layer in model.layers:
-            layer.trainable = _trainable(layer)
+            layer.trainable = trainable
         return model
 
 
@@ -226,17 +210,147 @@ def compile_model(model,
     )
 
 
+def get_default_config_file(modelname='bert'):
+    file = here + '/configs/bert/bert_config.json'
+    if modelname=='electra-small':
+        file = here + '/configs/electra-small/electra_small_config.json'
+    return file
+
+
+def load_from_ckpt(model, config, checkpoint_file, mode='finetune'):
+    """Load trained official model from checkpoint.
+
+    :param model: Built keras model.
+    :param config: Loaded configuration file.
+    :param checkpoint_file: The path to the checkpoint files, should end with '.ckpt'.
+    :param mode: `finetune` or `pretrain`
+    """
+    ckpt_reader = tf.train.load_checkpoint(checkpoint_file)
+    def loader(name):
+        if name.endswith(":0"):
+            name = name[:-2]
+        return ckpt_reader.get_tensor(name)
+
+    # map from keras-layer to ckpt's variable
+    variable_map = {
+        'Embedding-Token': ['bert/embeddings/word_embeddings'],
+        'Embedding-Position': ['bert/embeddings/position_embeddings'],
+        'Embedding-Segment': ['bert/embeddings/token_type_embeddings'],
+        'Embedding-Norm': ['bert/embeddings/LayerNorm/gamma', 'bert/embeddings/LayerNorm/beta'],
+    }
+
+    for i in range(config['num_hidden_layers']):
+        layername = 'Encoder-%d-MultiHeadSelfAttention'%(i + 1)
+        variable_map[layername] = [
+            'bert/encoder/layer_%d/attention/self/query/kernel' % i,
+            'bert/encoder/layer_%d/attention/self/query/bias' % i,
+            'bert/encoder/layer_%d/attention/self/key/kernel' % i,
+            'bert/encoder/layer_%d/attention/self/key/bias' % i,
+            'bert/encoder/layer_%d/attention/self/value/kernel' % i,
+            'bert/encoder/layer_%d/attention/self/value/bias' % i,
+            'bert/encoder/layer_%d/attention/output/dense/kernel' % i,
+            'bert/encoder/layer_%d/attention/output/dense/bias' % i,
+        ]
+        layername = 'Encoder-%d-MultiHeadSelfAttention-Norm'%(i + 1)
+        variable_map[layername] = [
+            'bert/encoder/layer_%d/attention/output/LayerNorm/gamma' % i,
+            'bert/encoder/layer_%d/attention/output/LayerNorm/beta' % i,
+        ]
+        layername = 'Encoder-%d-FeedForward' % (i + 1)
+        variable_map[layername] = [
+            'bert/encoder/layer_%d/intermediate/dense/kernel' % i,
+            'bert/encoder/layer_%d/intermediate/dense/bias' % i,
+            'bert/encoder/layer_%d/output/dense/kernel' % i,
+            'bert/encoder/layer_%d/output/dense/bias' % i,
+        ]
+        layername = 'Encoder-%d-FeedForward-Norm' % (i + 1)
+        variable_map[layername] = [
+            'bert/encoder/layer_%d/output/LayerNorm/gamma' % i,
+            'bert/encoder/layer_%d/output/LayerNorm/beta' % i,
+        ]
+
+    if mode=='pretrain':
+        variable_map['MLM-Dense'] = [
+            'cls/predictions/transform/dense/kernel',
+            'cls/predictions/transform/dense/bias',
+        ]
+        variable_map['MLM-Norm'] = [
+            'cls/predictions/transform/LayerNorm/gamma',
+            'cls/predictions/transform/LayerNorm/beta',
+        ]
+        variable_map['MLM-Sim'] = ['cls/predictions/output_bias']
+        variable_map['NSP-Dense'] = ['bert/pooler/dense/kernel', 'bert/pooler/dense/bias']
+        variable_map['NSP'] = [
+            'cls/seq_relationship/output_weights',
+            'cls/seq_relationship/output_bias'
+        ]
+
+    valid_layernames = [layer.name for layer in model.layers]
+    weights_value_pairs = []
+    for layername, v in variable_map.items():
+        if layername not in valid_layernames:
+            continue
+        weights = model.get_layer(layername).trainable_weights
+        values = [loader(item) for item in v]
+        if layername == 'NSP':
+            values[0] = np.transpose(values[0])
+        weights_value_pairs += list(zip(weights, values))
+
+    K.batch_set_value(weights_value_pairs)
+
+
+def build_pretrained_model(config_file=None,
+                           checkpoint_file=None,
+                           trainable=True,
+                           seq_len=None,
+                           mode='finetune',
+                           **kwargs):
+    """
+    :param config_file: The path to the JSON configuration file.
+    :param checkpoint_file: The path to the checkpoint files, should end with '.ckpt'.
+    :param trainable: Whether the model is trainable. The default value is the same with `training`.
+    :param seq_len: If it is not None and it is shorter than the value in the config file, the weights in
+                    position embeddings will be sliced to fit the new length.
+    :param mode: `finetune` or `pretrain`
+    :return: model
+    """
+    if not config_file:
+        config_file = get_default_config_file(modelname='bert')
+
+    with open(config_file, 'r') as reader:
+        config = json.loads(reader.read())
+
+    if seq_len is not None:
+        if seq_len > config['max_position_embeddings']:
+            raise ValueError('seq_len must not be greater than %s, got %s'%
+                             (config['max_position_embeddings'], seq_len))
+
+    model = get_model(
+        token_num=config['vocab_size'],
+        pos_num=config['max_position_embeddings'],
+        seq_len=seq_len,
+        embed_dim=config['hidden_size'],
+        transformer_num=config['num_hidden_layers'],
+        head_num=config['num_attention_heads'],
+        intermediate_size=config['intermediate_size'],
+        feed_forward_activation=config['hidden_act'],
+        trainable=trainable,
+        mode=mode,
+        **kwargs)
+
+    if checkpoint_file:
+        load_from_ckpt(model, config, checkpoint_file, mode=mode)
+    return model
+
+
 def get_custom_objects():
     """Get all custom objects for loading saved models."""
-    custom_objects = get_encoder_custom_objects()
+    custom_objects = {}
     custom_objects['PositionEmbedding'] = PositionEmbedding
     custom_objects['TokenEmbedding'] = TokenEmbedding
     custom_objects['EmbeddingSimilarity'] = EmbeddingSimilarity
     custom_objects['Masked'] = Masked
-    custom_objects['Extract'] = Extract
     custom_objects['gelu'] = gelu
-    custom_objects['gelu_tensorflow'] = gelu
-    custom_objects['gelu_fallback'] = gelu
     custom_objects['AdamWarmup'] = AdamWarmup
     return custom_objects
 
@@ -246,98 +360,3 @@ def set_custom_objects():
     for k, v in get_custom_objects().items():
         keras.utils.get_custom_objects()[k] = v
 
-
-def get_base_dict():
-    """Get basic dictionary containing special tokens."""
-    return {
-        TOKEN_PAD: 0,
-        TOKEN_UNK: 1,
-        TOKEN_CLS: 2,
-        TOKEN_SEP: 3,
-        TOKEN_MASK: 4,
-    }
-
-
-def get_token_embedding(model):
-    """Get token embedding from model.
-
-    :param model: The built model.
-    :return: The output weights of embeddings.
-    """
-    return model.get_layer('Embedding-Token').output[1]
-
-
-def gen_batch_inputs(sentence_pairs,
-                     token_dict,
-                     token_list,
-                     seq_len=512,
-                     mask_rate=0.15,
-                     mask_mask_rate=0.8,
-                     mask_random_rate=0.1,
-                     swap_sentence_rate=0.5,
-                     force_mask=True):
-    """Generate a batch of inputs and outputs for training.
-
-    :param sentence_pairs: A list of pairs containing lists of tokens.
-    :param token_dict: The dictionary containing special tokens.
-    :param token_list: A list containing all tokens.
-    :param seq_len: Length of the sequence.
-    :param mask_rate: The rate of choosing a token for prediction.
-    :param mask_mask_rate: The rate of replacing the token to `TOKEN_MASK`.
-    :param mask_random_rate: The rate of replacing the token to a random word.
-    :param swap_sentence_rate: The rate of swapping the second sentences.
-    :param force_mask: At least one position will be masked.
-    :return: All the inputs and outputs.
-    """
-    batch_size = len(sentence_pairs)
-    base_dict = get_base_dict()
-    unknown_index = token_dict[TOKEN_UNK]
-    # Generate sentence swapping mapping
-    nsp_outputs = np.zeros((batch_size,))
-    mapping = {}
-    if swap_sentence_rate > 0.0:
-        indices = [index for index in range(batch_size) if np.random.random() < swap_sentence_rate]
-        mapped = indices[:]
-        np.random.shuffle(mapped)
-        for i in range(len(mapped)):
-            if indices[i] != mapped[i]:
-                nsp_outputs[indices[i]] = 1.0
-        mapping = {indices[i]: mapped[i] for i in range(len(indices))}
-    # Generate MLM
-    token_inputs, segment_inputs, masked_inputs = [], [], []
-    mlm_outputs = []
-    for i in range(batch_size):
-        first, second = sentence_pairs[i][0], sentence_pairs[mapping.get(i, i)][1]
-        segment_inputs.append(([0] * (len(first) + 2) + [1] * (seq_len - (len(first) + 2)))[:seq_len])
-        tokens = [TOKEN_CLS] + first + [TOKEN_SEP] + second + [TOKEN_SEP]
-        tokens = tokens[:seq_len]
-        tokens += [TOKEN_PAD] * (seq_len - len(tokens))
-        token_input, masked_input, mlm_output = [], [], []
-        has_mask = False
-        for token in tokens:
-            mlm_output.append(token_dict.get(token, unknown_index))
-            if token not in base_dict and np.random.random() < mask_rate:
-                has_mask = True
-                masked_input.append(1)
-                r = np.random.random()
-                if r < mask_mask_rate:
-                    token_input.append(token_dict[TOKEN_MASK])
-                elif r < mask_mask_rate + mask_random_rate:
-                    while True:
-                        token = token_list[np.random.randint(0, len(token_list))]
-                        if token not in base_dict:
-                            token_input.append(token_dict[token])
-                            break
-                else:
-                    token_input.append(token_dict.get(token, unknown_index))
-            else:
-                masked_input.append(0)
-                token_input.append(token_dict.get(token, unknown_index))
-        if force_mask and not has_mask:
-            masked_input[1] = 1
-        token_inputs.append(token_input)
-        masked_inputs.append(masked_input)
-        mlm_outputs.append(mlm_output)
-    inputs = [np.asarray(x) for x in [token_inputs, segment_inputs, masked_inputs]]
-    outputs = [np.asarray(np.expand_dims(x, axis=-1)) for x in [mlm_outputs, nsp_outputs]]
-    return inputs, outputs

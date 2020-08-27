@@ -2,8 +2,7 @@ import os
 import time
 import numpy as np
 
-from keras_bert_easy.bert import get_model
-from keras_bert_easy.loader import build_pretrained_model
+from keras_bert_easy import build_pretrained_model
 from keras_bert import load_trained_model_from_checkpoint
 from bert4keras.models import build_transformer_model
 
