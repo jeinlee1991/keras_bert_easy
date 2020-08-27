@@ -108,7 +108,6 @@ class keras_Adam_2lr(BaseOptimizer):
         # Setting lr of the initial layers
         lr_grp = lr_t[0]
         for p, g, m, v, vhat in zip(params, grads, ms, vs, vhats):
-
             # Updating lr when the split layer is encountered
             if p.name in self.final_layers:
                 lr_grp = lr_t[1]
@@ -147,7 +146,6 @@ class keras_Adam_2lr(BaseOptimizer):
 
     def get_config(self):
         config = {
-            'lr': (K.get_value(self.lrate)),
             'beta_1': float(K.get_value(self.beta_1)),
             'beta_2': float(K.get_value(self.beta_2)),
             'weight_decay': self.weight_decay,
@@ -259,7 +257,7 @@ class keras_Adam_3lr(BaseOptimizer):
 
     def get_config(self):
         config = {
-            'lr': (K.get_value(self.lrate)),
+            # 'lr': (K.get_value(self.lrate)),
             'beta_1': float(K.get_value(self.beta_1)),
             'beta_2': float(K.get_value(self.beta_2)),
             'weight_decay': self.weight_decay,
@@ -379,7 +377,6 @@ class keras_Adam_lr_decay(BaseOptimizer):
 
     def get_config(self):
         config = {
-            'lr': (K.get_value(self.lrate)),
             'beta_1': float(K.get_value(self.beta_1)),
             'beta_2': float(K.get_value(self.beta_2)),
             'weight_decay': self.weight_decay,
@@ -425,10 +422,10 @@ class AccumOptimizer(BaseOptimizer):
             self.steps_per_update = steps_per_update
             self.iterations = K.variable(0, dtype='int64', name='iterations')
             self.cond = K.equal(self.iterations % self.steps_per_update, 0)
-            self.lr = self.optimizer.lrate
+            self.lrate = self.optimizer.lrate
 
-            if len(self.lr.shape):
-                lr_size = self.lr.shape[0]
+            if len(self.lrate.shape):
+                lr_size = self.lrate.shape[0]
                 self.optimizer.lrate = K.switch(self.cond, self.optimizer.lrate, K.variable([0.]*lr_size))
             else:
                 self.optimizer.lrate = K.switch(self.cond, self.optimizer.lrate, K.variable(0.))
@@ -454,10 +451,13 @@ class AccumOptimizer(BaseOptimizer):
             K.update_add(self.optimizer.iterations, K.cast(self.cond, 'int64')),
         ]
         # 累积梯度 (gradient accumulation)
-        self.accum_grads = [K.zeros(K.int_shape(p), dtype=K.dtype(p)) for p in params]
         grads = self.get_gradients(loss, params)
+        self.accum_grads = [K.zeros(K.int_shape(p), dtype=K.dtype(p)) for p in params]
+
         for g, ag in zip(grads, self.accum_grads):
-            self.updates.append(K.update(ag, K.switch(self.cond, g, ag + g)))
+            ag_new = ag + g
+            g = g + K.zeros(K.int_shape(ag_new), dtype=K.dtype(ag_new))
+            self.updates.append(K.update(ag, K.switch(self.cond, g, ag_new)))
         # 继承optimizer的更新 (inheriting updates of original optimizer)
         self.updates.extend(self.optimizer.get_updates(loss, params)[1:])
         self.weights.extend(self.optimizer.weights)
