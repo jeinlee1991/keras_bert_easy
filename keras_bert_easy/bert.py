@@ -40,12 +40,10 @@ def gelu(x):
     return 0.5 * x * (1.0 + erf(x / sqrt(2.0)))
 
 
-def get_encoders(input_layer,
-                 encoder_num,
-                 head_num,
-                 intermediate_size,
-                 feed_forward_activation=gelu,
-                 dropout_rate=0.0,):
+def get_encoders(
+        input_layer, encoder_num, head_num,
+        intermediate_size, feed_forward_activation=gelu,
+        dropout_rate=0.0,):
     """Get encoders.
 
     :param encoder_num: Number of encoder components.
@@ -97,18 +95,11 @@ def get_encoders(input_layer,
     return x0
 
 
-def get_model(token_num,
-              pos_num=512,
-              seq_len=512,
-              embed_dim=768,
-              transformer_num=12,
-              head_num=12,
-              intermediate_size=3072,
-              dropout_rate=0.1,
-              feed_forward_activation='gelu',
-              trainable=True,
-              mode='finetune',
-              **kwargs):
+def get_model(
+        token_num, pos_num=512, seq_len=512, embed_dim=768,
+        transformer_num=12, head_num=12, intermediate_size=3072,
+        dropout_rate=0.1, feed_forward_activation='gelu',
+        trainable=True, mode='finetune',**kwargs):
     """Get BERT model.
 
     See: https://arxiv.org/pdf/1810.04805.pdf
@@ -184,11 +175,9 @@ def get_model(token_num,
         return model
 
 
-def compile_model(model,
-                  weight_decay=0.01,
-                  decay_steps=100000,
-                  warmup_steps=10000,
-                  learning_rate=1e-4):
+def compile_model(
+        model, weight_decay=0.01, decay_steps=100000,
+        warmup_steps=10000, learning_rate=1e-4):
     """Compile the model with warmup optimizer and sparse cross-entropy loss.
 
     :param model: The built model.
@@ -299,12 +288,9 @@ def load_from_ckpt(model, config, checkpoint_file, mode='finetune'):
     K.batch_set_value(weights_value_pairs)
 
 
-def build_pretrained_model(config_file=None,
-                           checkpoint_file=None,
-                           trainable=True,
-                           seq_len=None,
-                           mode='finetune',
-                           **kwargs):
+def build_pretrained_model(
+        config_file=None, checkpoint_file=None, trainable=True,
+        seq_len=None, mode='finetune', **kwargs):
     """
     :param config_file: The path to the JSON configuration file.
     :param checkpoint_file: The path to the checkpoint files, should end with '.ckpt'.

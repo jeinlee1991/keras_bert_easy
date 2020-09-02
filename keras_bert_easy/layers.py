@@ -1,8 +1,10 @@
 import tensorflow as tf
 from .backend import keras, K, initializers, regularizers, constraints
 
+Layer = keras.layers.Layer
 
-class TrigPosEmbedding(keras.layers.Layer):
+
+class TrigPosEmbedding(Layer):
     """Position embedding use sine and cosine functions.
 
     See: https://arxiv.org/pdf/1706.03762
@@ -109,7 +111,7 @@ class TrigPosEmbedding(keras.layers.Layer):
         return output
 
 
-class EmbeddingSim(keras.layers.Layer):
+class EmbeddingSim(Layer):
     """Calculate similarity between features and token embeddings with bias term."""
 
     def __init__(self,
@@ -182,7 +184,7 @@ class EmbeddingSim(keras.layers.Layer):
         return keras.activations.softmax(outputs)
 
 
-class MultiHeadAttention(keras.layers.Layer):
+class MultiHeadAttention(Layer):
     """多头注意力机制
     """
     def __init__(
@@ -281,7 +283,7 @@ class MultiHeadAttention(keras.layers.Layer):
         return mask
 
 
-class FeedForward(keras.layers.Layer):
+class FeedForward(Layer):
     def __init__(self,
                  units,
                  activation=None,
@@ -319,7 +321,7 @@ class FeedForward(keras.layers.Layer):
         return mask
 
 
-class LayerNormalization(keras.layers.Layer):
+class LayerNormalization(Layer):
 
     def __init__(self,
                  center=True,
@@ -415,136 +417,33 @@ class LayerNormalization(keras.layers.Layer):
         return outputs
 
 
-class PositionEmbedding(keras.layers.Layer):
-    """Turn integers (positions) into dense vectors of fixed size.
-    eg. [[-4], [10]] -> [[0.25, 0.1], [0.6, -0.2]]
-
-    Expand mode: negative integers (relative position) could be used in this mode.
-        # Input shape
-            2D tensor with shape: `(batch_size, sequence_length)`.
-
-        # Output shape
-            3D tensor with shape: `(batch_size, sequence_length, output_dim)`.
-
-    Add mode:
-        # Input shape
-            3D tensor with shape: `(batch_size, sequence_length, feature_dim)`.
-
-        # Output shape
-            3D tensor with shape: `(batch_size, sequence_length, feature_dim)`.
-
-    Concat mode:
-        # Input shape
-            3D tensor with shape: `(batch_size, sequence_length, feature_dim)`.
-
-        # Output shape
-            3D tensor with shape: `(batch_size, sequence_length, feature_dim + output_dim)`.
-    """
-    MODE_EXPAND = 'expand'
-    MODE_ADD = 'add'
-    MODE_CONCAT = 'concat'
-
-    def __init__(self,
-                 input_dim,
-                 output_dim,
-                 mode=MODE_EXPAND,
-                 embeddings_initializer='uniform',
-                 embeddings_regularizer=None,
-                 activity_regularizer=None,
-                 embeddings_constraint=None,
-                 mask_zero=False,
-                 **kwargs):
-        """
-        :param input_dim: The maximum absolute value of positions.
-        :param output_dim: The embedding dimension.
-        :param embeddings_initializer:
-        :param embeddings_regularizer:
-        :param activity_regularizer:
-        :param embeddings_constraint:
-        :param mask_zero: The index that represents padding. Only works in `append` mode.
-        :param kwargs:
-        """
-        self.input_dim = input_dim
-        self.output_dim = output_dim
-        self.mode = mode
-        self.embeddings_initializer = keras.initializers.get(embeddings_initializer)
-        self.embeddings_regularizer = keras.regularizers.get(embeddings_regularizer)
-        self.activity_regularizer = keras.regularizers.get(activity_regularizer)
-        self.embeddings_constraint = keras.constraints.get(embeddings_constraint)
-        self.mask_zero = mask_zero
-        self.supports_masking = mask_zero is not False
-
-        self.embeddings = None
+class PositionEmbedding(Layer):
+    def __init__(self, max_pos_num=512, **kwargs):
         super(PositionEmbedding, self).__init__(**kwargs)
-
-    def get_config(self):
-        config = {'input_dim': self.input_dim,
-                  'output_dim': self.output_dim,
-                  'mode': self.mode,
-                  'embeddings_initializer': keras.initializers.serialize(self.embeddings_initializer),
-                  'embeddings_regularizer': keras.regularizers.serialize(self.embeddings_regularizer),
-                  'activity_regularizer': keras.regularizers.serialize(self.activity_regularizer),
-                  'embeddings_constraint': keras.constraints.serialize(self.embeddings_constraint),
-                  'mask_zero': self.mask_zero}
-        base_config = super(PositionEmbedding, self).get_config()
-        return dict(list(base_config.items()) + list(config.items()))
+        self.max_pos_num = max_pos_num
 
     def build(self, input_shape):
-        if self.mode == self.MODE_EXPAND:
-            self.embeddings = self.add_weight(
-                shape=(self.input_dim * 2 + 1, self.output_dim),
-                initializer=self.embeddings_initializer,
-                name='embeddings',
-                regularizer=self.embeddings_regularizer,
-                constraint=self.embeddings_constraint,
-            )
-        else:
-            self.embeddings = self.add_weight(
-                shape=(self.input_dim, self.output_dim),
-                initializer=self.embeddings_initializer,
-                name='embeddings',
-                regularizer=self.embeddings_regularizer,
-                constraint=self.embeddings_constraint,
-            )
-        super(PositionEmbedding, self).build(input_shape)
-
-    def compute_mask(self, inputs, mask=None):
-        if self.mode == self.MODE_EXPAND:
-            if self.mask_zero:
-                output_mask = K.not_equal(inputs, self.mask_zero)
-            else:
-                output_mask = None
-        else:
-            output_mask = mask
-        return output_mask
-
-    def compute_output_shape(self, input_shape):
-        if self.mode == self.MODE_EXPAND:
-            return input_shape + (self.output_dim,)
-        if self.mode == self.MODE_CONCAT:
-            return input_shape[:-1] + (input_shape[-1] + self.output_dim,)
-        return input_shape
+        hidden_dim = input_shape[2]
+        self.pos_emb_layer = keras.layers.Embedding(
+            self.max_pos_num, hidden_dim,
+            name='embeddings'
+        )
 
     def call(self, inputs, **kwargs):
-        if self.mode == self.MODE_EXPAND:
-            if K.dtype(inputs) != 'int32':
-                inputs = K.cast(inputs, 'int32')
-            return K.gather(
-                self.embeddings,
-                K.minimum(K.maximum(inputs, -self.input_dim), self.input_dim) + self.input_dim,
-            )
-        input_shape = K.shape(inputs)
-        if self.mode == self.MODE_ADD:
-            batch_size, seq_len, output_dim = input_shape[0], input_shape[1], input_shape[2]
-        else:
-            batch_size, seq_len, output_dim = input_shape[0], input_shape[1], self.output_dim
-        pos_embeddings = K.tile(
-            K.expand_dims(self.embeddings[:seq_len, :self.output_dim], axis=0),
-            [batch_size, 1, 1],
-        )
-        if self.mode == self.MODE_ADD:
-            return inputs + pos_embeddings
-        return K.concatenate([inputs, pos_embeddings], axis=-1)
+        shape = K.shape(inputs)
+        batch, seqlen = shape[0], shape[1]
+        x_pos = K.expand_dims(K.arange(0, seqlen), axis=0)
+        x_pos = K.tile(x_pos, [batch,1])
+        x_pos_emb = self.pos_emb_layer(x_pos)
+        x = keras.layers.Add()([inputs, x_pos_emb])
+        return x
+
+    def compute_mask(self, inputs, mask=None):
+        return mask
+
+    def compute_output_shape(self, input_shape):
+        return input_shape
+
 
 
 class TokenEmbedding(keras.layers.Embedding):
@@ -592,16 +491,13 @@ def get_embedding(inputs, token_num, pos_num, embed_dim, trainable=True):
     )([tokenembedding, segmentembedding])
 
     embed_layer = PositionEmbedding(
-        input_dim=pos_num,
-        output_dim=embed_dim,
-        mode=PositionEmbedding.MODE_ADD,
-        trainable=trainable,
+        max_pos_num=pos_num,
         name='Embedding-Position',
     )(embed_layer)
     return embed_layer, embed_weights
 
 
-class EmbeddingSimilarity(keras.layers.Layer):
+class EmbeddingSimilarity(Layer):
     """Calculate similarity between features and token embeddings with bias term."""
 
     def __init__(self,
@@ -654,7 +550,7 @@ class EmbeddingSimilarity(keras.layers.Layer):
         return keras.activations.softmax(outputs)
 
 
-class MaskedGlobalMaxPool1D(keras.layers.Layer):
+class MaskedGlobalMaxPool1D(Layer):
 
     def __init__(self, **kwargs):
         super(MaskedGlobalMaxPool1D, self).__init__(**kwargs)
@@ -691,7 +587,7 @@ class MaskedConv1D(keras.layers.Conv1D):
         return super(MaskedConv1D, self).call(inputs)
 
 
-class Masked(keras.layers.Layer):
+class Masked(Layer):
     """Generate output mask based on the given mask.
 
     The inputs for the layer is the original input layer and the masked locations.
