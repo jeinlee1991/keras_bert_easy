@@ -245,8 +245,7 @@ def get_bert_model(
 
     x = keras.layers.Dropout(
         rate=dropout_rate, name='Embedding-Dropout')(x)
-    x = LayerNormalization(
-        trainable=trainable, name='Embedding-Norm')(x)
+    x = LayerNormalization(name='Embedding-Norm')(x)
 
     x = get_transformers(
         input_tensor=x,
