@@ -45,15 +45,12 @@ def get_encoders(
         intermediate_size, feed_forward_activation=gelu,
         dropout_rate=0.0,):
     """Get encoders.
-
-    :param encoder_num: Number of encoder components.
     :param input_layer: Input layer.
+    :param encoder_num: Number of encoder components.
     :param head_num: Number of heads in multi-head self-attention.
-    :param hidden_dim: Hidden dimension of feed forward layer.
-    :param attention_activation: Activation for multi-head self-attention.
+    :param intermediate_size: intermediate size of feed-forward layer.
     :param feed_forward_activation: Activation for feed-forward layer.
     :param dropout_rate: Dropout rate.
-    :param trainable: Whether the layers are trainable.
     :return: Output layer.
     """
 
@@ -93,86 +90,6 @@ def get_encoders(
         x0 = x
 
     return x0
-
-
-def get_model(
-        token_num, pos_num=512, seq_len=512, embed_dim=768,
-        transformer_num=12, head_num=12, intermediate_size=3072,
-        dropout_rate=0.1, feed_forward_activation='gelu',
-        trainable=True, mode='finetune',**kwargs):
-    """Get BERT model.
-
-    See: https://arxiv.org/pdf/1810.04805.pdf
-
-    :param token_num: Number of tokens.
-    :param pos_num: Maximum position.
-    :param seq_len: Maximum length of the input sequence or None.
-    :param embed_dim: Dimensions of embeddings.
-    :param transformer_num: Number of transformers.
-    :param head_num: Number of heads in multi-head attention in each transformer.
-    :param intermediate_size: Dimension of the feed forward layer in each transformer.
-    :param dropout_rate: Dropout rate.
-    :param feed_forward_activation: Activation for feed-forward layers.
-    :param mode: finetine or pretrain. A built model with MLM and NSP outputs will be returned if it is `pretrain`,
-                otherwise model with transformer output will be returned.
-    :param trainable: Whether the model is trainable.
-    :return: The built model.
-    """
-
-    if feed_forward_activation == 'gelu':
-        feed_forward_activation = gelu
-
-    inputs = [keras.layers.Input(shape=(seq_len,), name='Input-%s' % name)
-              for name in ['Token', 'Segment', 'Masked']]
-
-    x, embed_weights = get_embedding(
-        inputs,
-        token_num=token_num,
-        embed_dim=embed_dim,
-        pos_num=pos_num,
-    )
-
-    x = keras.layers.Dropout(
-        rate=dropout_rate,
-        name='Embedding-Dropout'
-    )(x)
-
-    x = LayerNormalization(
-        trainable=trainable,
-        name='Embedding-Norm'
-    )(x)
-
-    x = get_encoders(
-        input_layer=x,
-        encoder_num=transformer_num,
-        head_num=head_num,
-        intermediate_size=intermediate_size,
-        feed_forward_activation=feed_forward_activation,
-        dropout_rate=dropout_rate,
-    )
-
-    if mode=='pretrain':
-        mlm_dense_layer = keras.layers.Dense(
-            units=embed_dim,
-            activation=feed_forward_activation,
-            name='MLM-Dense',
-        )(x)
-        mlm_norm_layer = LayerNormalization(name='MLM-Norm')(mlm_dense_layer)
-        mlm_pred_layer = EmbeddingSimilarity(name='MLM-Sim')([mlm_norm_layer, embed_weights])
-        masked_layer = Masked(name='MLM')([mlm_pred_layer, inputs[-1]])
-        nsp_dense_layer = keras.layers.Dense(units=embed_dim, activation='tanh', name='NSP-Dense')(x[:,0,:])
-        nsp_pred_layer = keras.layers.Dense(units=2, activation='softmax', name='NSP')(nsp_dense_layer)
-        model = keras.models.Model(inputs=inputs, outputs=[masked_layer, nsp_pred_layer])
-        for layer in model.layers:
-            layer.trainable = trainable
-        return model
-
-    else:
-        inputs = inputs[:2]
-        model = keras.models.Model(inputs=inputs, outputs=x)
-        for layer in model.layers:
-            layer.trainable = trainable
-        return model
 
 
 def compile_model(
@@ -288,9 +205,120 @@ def load_from_ckpt(model, config, checkpoint_file, mode='finetune'):
     K.batch_set_value(weights_value_pairs)
 
 
+def get_embedding(inputs, token_num, pos_num, embed_dim, trainable=True):
+    """Get embedding layer.
+
+    See: https://arxiv.org/pdf/1810.04805.pdf
+
+    :param inputs: Input layers.
+    :param token_num: Number of tokens.
+    :param pos_num: Maximum position.
+    :param embed_dim: The dimension of all embedding layers.
+    :param trainable: Whether the layers are trainable.
+    :return: The merged embedding layer and weights of token embedding.
+    """
+    tokenembedding, embed_weights = TokenEmbedding(
+        input_dim=token_num,
+        output_dim=embed_dim,
+        mask_zero=True,
+        trainable=trainable,
+        name='Embedding-Token',
+    )(inputs[0])
+
+    segmentembedding = keras.layers.Embedding(
+        input_dim=2,
+        output_dim=embed_dim,
+        trainable=trainable,
+        name='Embedding-Segment',
+    )(inputs[1])
+
+    embed_layer = keras.layers.Add(
+        name='Embedding-Token-Segment'
+    )([tokenembedding, segmentembedding])
+
+    embed_layer = PositionEmbedding(
+        max_pos_num=pos_num,
+        name='Embedding-Position',
+    )(embed_layer)
+    return embed_layer, embed_weights
+
+
+def get_model(
+        vocab_size=21128, max_position_embeddings=512, seq_len=None, hidden_size=768,
+        num_hidden_layers=12, num_attention_heads=12, intermediate_size=3072,
+        dropout_rate=0.1, hidden_act='gelu',
+        trainable=True, mode='finetune', **kwargs):
+    """Get BERT model.
+
+    See: https://arxiv.org/pdf/1810.04805.pdf
+
+    :param vocab_size: vocab size.
+    :param max_position_embeddings: Maximum position.
+    :param seq_len: Maximum length of the input sequence or None.
+    :param hidden_size: Dimensions of embeddings.
+    :param num_hidden_layers: Number of transformers.
+    :param num_attention_heads: Number of heads in multi-head attention in each transformer.
+    :param intermediate_size: Dimension of the feed forward layer in each transformer.
+    :param dropout_rate: Dropout rate.
+    :param hidden_act: Activation for feed-forward layers.
+    :param mode: finetine or pretrain. A built model with MLM and NSP outputs will be returned if it is `pretrain`,
+                otherwise model with transformer output will be returned.
+    :param trainable: Whether the model is trainable.
+    :return: The built model.
+    """
+
+    if hidden_act == 'gelu':
+        hidden_act = gelu
+
+    inputs = [keras.layers.Input(shape=(seq_len,), name='Input-%s' % name)
+              for name in ['Token', 'Segment', 'Masked']]
+
+    x, embed_weights = get_embedding(
+        inputs, token_num=vocab_size, embed_dim=hidden_size,
+        pos_num=max_position_embeddings)
+
+    x = keras.layers.Dropout(
+        rate=dropout_rate, name='Embedding-Dropout')(x)
+
+    x = LayerNormalization(
+        trainable=trainable, name='Embedding-Norm')(x)
+
+    x = get_encoders(
+        input_layer=x,
+        encoder_num=num_hidden_layers,
+        head_num=num_attention_heads,
+        intermediate_size=intermediate_size,
+        feed_forward_activation=hidden_act,
+        dropout_rate=dropout_rate,
+    )
+
+    if mode=='pretrain':
+        mlm_dense_layer = keras.layers.Dense(
+            units=hidden_size,
+            activation=hidden_act,
+            name='MLM-Dense',
+        )(x)
+        mlm_norm_layer = LayerNormalization(name='MLM-Norm')(mlm_dense_layer)
+        mlm_pred_layer = EmbeddingSimilarity(name='MLM-Sim')([mlm_norm_layer, embed_weights])
+        masked_layer = Masked(name='MLM')([mlm_pred_layer, inputs[-1]])
+        nsp_dense_layer = keras.layers.Dense(units=hidden_size, activation='tanh', name='NSP-Dense')(x[:,0,:])
+        nsp_pred_layer = keras.layers.Dense(units=2, activation='softmax', name='NSP')(nsp_dense_layer)
+        model = keras.models.Model(inputs=inputs, outputs=[masked_layer, nsp_pred_layer])
+        for layer in model.layers:
+            layer.trainable = trainable
+        return model
+
+    else:
+        inputs = inputs[:2]
+        model = keras.models.Model(inputs=inputs, outputs=x)
+        for layer in model.layers:
+            layer.trainable = trainable
+        return model
+
+
 def build_pretrained_model(
         config_file=None, checkpoint_file=None, trainable=True,
-        seq_len=None, mode='finetune', **kwargs):
+        seq_len=None, mode='finetune'):
     """
     :param config_file: The path to the JSON configuration file.
     :param checkpoint_file: The path to the checkpoint files, should end with '.ckpt'.
@@ -311,18 +339,23 @@ def build_pretrained_model(
             raise ValueError('seq_len must not be greater than %s, got %s'%
                              (config['max_position_embeddings'], seq_len))
 
-    model = get_model(
-        token_num=config['vocab_size'],
-        pos_num=config['max_position_embeddings'],
-        seq_len=seq_len,
-        embed_dim=config['hidden_size'],
-        transformer_num=config['num_hidden_layers'],
-        head_num=config['num_attention_heads'],
-        intermediate_size=config['intermediate_size'],
-        feed_forward_activation=config['hidden_act'],
-        trainable=trainable,
-        mode=mode,
-        **kwargs)
+    config['trainable'] = trainable
+    config['mode'] = mode
+    config['seq_len'] = seq_len
+    config['dropout_rate'] = config.get('hidden_dropout_prob', 0.)
+    model = get_model(**config)
+    # model = get_model(
+    #     vocab_size=config['vocab_size'],
+    #     max_position_embeddings=config['max_position_embeddings'],
+    #     seq_len=seq_len,
+    #     hidden_size=config['hidden_size'],
+    #     num_hidden_layers=config['num_hidden_layers'],
+    #     num_attention_heads=config['num_attention_heads'],
+    #     intermediate_size=config['intermediate_size'],
+    #     dropout_rate=config['hidden_dropout_prob'],
+    #     hidden_act=config['hidden_act'],
+    #     trainable=trainable,
+    #     mode=mode)
 
     if checkpoint_file:
         load_from_ckpt(model, config, checkpoint_file, mode=mode)

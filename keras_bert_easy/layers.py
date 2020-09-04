@@ -1,5 +1,5 @@
 import tensorflow as tf
-from .backend import keras, K, initializers, regularizers, constraints
+from .backend import keras, K
 
 Layer = keras.layers.Layer
 
@@ -445,7 +445,6 @@ class PositionEmbedding(Layer):
         return input_shape
 
 
-
 class TokenEmbedding(keras.layers.Embedding):
     """Embedding layer with weights returned."""
 
@@ -457,44 +456,6 @@ class TokenEmbedding(keras.layers.Embedding):
 
     def call(self, inputs):
         return [super(TokenEmbedding, self).call(inputs), self.embeddings + 0]
-
-
-def get_embedding(inputs, token_num, pos_num, embed_dim, trainable=True):
-    """Get embedding layer.
-
-    See: https://arxiv.org/pdf/1810.04805.pdf
-
-    :param inputs: Input layers.
-    :param token_num: Number of tokens.
-    :param pos_num: Maximum position.
-    :param embed_dim: The dimension of all embedding layers.
-    :param trainable: Whether the layers are trainable.
-    :return: The merged embedding layer and weights of token embedding.
-    """
-    tokenembedding, embed_weights = TokenEmbedding(
-        input_dim=token_num,
-        output_dim=embed_dim,
-        mask_zero=True,
-        trainable=trainable,
-        name='Embedding-Token',
-    )(inputs[0])
-
-    segmentembedding = keras.layers.Embedding(
-        input_dim=2,
-        output_dim=embed_dim,
-        trainable=trainable,
-        name='Embedding-Segment',
-    )(inputs[1])
-
-    embed_layer = keras.layers.Add(
-        name='Embedding-Token-Segment'
-    )([tokenembedding, segmentembedding])
-
-    embed_layer = PositionEmbedding(
-        max_pos_num=pos_num,
-        name='Embedding-Position',
-    )(embed_layer)
-    return embed_layer, embed_weights
 
 
 class EmbeddingSimilarity(Layer):
