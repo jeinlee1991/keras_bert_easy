@@ -446,16 +446,16 @@ class PositionEmbedding(Layer):
 
 
 class TokenEmbedding(keras.layers.Embedding):
-    """Embedding layer with weights returned."""
+    def call(self, inputs):
+        return [super(TokenEmbedding, self).call(inputs),
+                self.embeddings]
 
     def compute_output_shape(self, input_shape):
-        return [super(TokenEmbedding, self).compute_output_shape(input_shape), (self.input_dim, self.output_dim)]
+        return [super(TokenEmbedding, self).compute_output_shape(input_shape),
+                K.shape(self.embeddings)]
 
     def compute_mask(self, inputs, mask=None):
-        return [super(TokenEmbedding, self).compute_mask(inputs, mask), None]
-
-    def call(self, inputs):
-        return [super(TokenEmbedding, self).call(inputs), self.embeddings + 0]
+        return [super(TokenEmbedding, self).compute_mask(inputs), None]
 
 
 class EmbeddingSimilarity(Layer):

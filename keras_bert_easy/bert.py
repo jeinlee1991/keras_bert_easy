@@ -3,7 +3,6 @@ import json
 
 import numpy as np
 import tensorflow as tf
-from tensorflow.python.ops.math_ops import erf, sqrt
 
 from .layers import *
 from .backend import keras
@@ -13,7 +12,7 @@ here = os.path.abspath(os.path.dirname(__file__))
 
 __all__ = [
     'TOKEN_PAD', 'TOKEN_UNK', 'TOKEN_CLS', 'TOKEN_SEP', 'TOKEN_MASK',
-    'gelu', 'get_model', 'compile_model', 'get_base_dict',
+    'gelu', 'get_bert_model', 'compile_model', 'get_base_dict',
     'get_custom_objects', 'set_custom_objects', 'build_pretrained_model',
 ]
 
@@ -37,59 +36,7 @@ def get_base_dict():
 
 
 def gelu(x):
-    return 0.5 * x * (1.0 + erf(x / sqrt(2.0)))
-
-
-def get_encoders(
-        input_layer, encoder_num, head_num,
-        intermediate_size, feed_forward_activation=gelu,
-        dropout_rate=0.0,):
-    """Get encoders.
-    :param input_layer: Input layer.
-    :param encoder_num: Number of encoder components.
-    :param head_num: Number of heads in multi-head self-attention.
-    :param intermediate_size: intermediate size of feed-forward layer.
-    :param feed_forward_activation: Activation for feed-forward layer.
-    :param dropout_rate: Dropout rate.
-    :return: Output layer.
-    """
-
-    x0 = input_layer
-    for i in range(encoder_num):
-        name = 'Encoder-%d' % (i + 1)
-        attention_name = '%s-MultiHeadSelfAttention' % name
-        feed_forward_name = '%s-FeedForward' % name
-
-        # attention
-        x = MultiHeadAttention(
-            head_num=head_num,
-            name=attention_name,
-            attention_prob_dropout_rate=dropout_rate
-        )(x0)
-        x = keras.layers.Dropout(
-            rate=dropout_rate,
-            name='%s-Dropout' % attention_name
-        )(x)
-        x = keras.layers.Add(name='%s-Add' % attention_name)([x0, x])
-        x = LayerNormalization(name='%s-Norm' % attention_name)(x)
-
-        # feedforward
-        x0 = x
-        x = FeedForward(
-            units=intermediate_size,
-            activation=feed_forward_activation,
-            name=feed_forward_name
-        )(x0)
-        x = keras.layers.Dropout(
-            rate=dropout_rate,
-            name='%s-Dropout' % feed_forward_name
-        )(x)
-        x = keras.layers.Add(name='%s-Add' % feed_forward_name)([x0, x])
-        x = LayerNormalization(name='%s-Norm' % feed_forward_name)(x)
-
-        x0 = x
-
-    return x0
+    return 0.5 * x * (1.0 + tf.math.erf(x / tf.sqrt(2.0)))
 
 
 def compile_model(
@@ -205,48 +152,60 @@ def load_from_ckpt(model, config, checkpoint_file, mode='finetune'):
     K.batch_set_value(weights_value_pairs)
 
 
-def get_embedding(inputs, token_num, pos_num, embed_dim, trainable=True):
-    """Get embedding layer.
-
-    See: https://arxiv.org/pdf/1810.04805.pdf
-
-    :param inputs: Input layers.
-    :param token_num: Number of tokens.
-    :param pos_num: Maximum position.
-    :param embed_dim: The dimension of all embedding layers.
-    :param trainable: Whether the layers are trainable.
-    :return: The merged embedding layer and weights of token embedding.
+def get_transformers(
+        input_tensor, transformer_num, head_num,
+        intermediate_size, feed_forward_activation=gelu,
+        dropout_rate=0.0,):
+    """Get encoders.
+    :param input_tensor: Input layer.
+    :param transformer_num: Number of transformer-encoder components.
+    :param head_num: Number of heads in multi-head self-attention.
+    :param intermediate_size: intermediate size of feed-forward layer.
+    :param feed_forward_activation: Activation for feed-forward layer.
+    :param dropout_rate: Dropout rate.
+    :return: Output layer.
     """
-    tokenembedding, embed_weights = TokenEmbedding(
-        input_dim=token_num,
-        output_dim=embed_dim,
-        mask_zero=True,
-        trainable=trainable,
-        name='Embedding-Token',
-    )(inputs[0])
 
-    segmentembedding = keras.layers.Embedding(
-        input_dim=2,
-        output_dim=embed_dim,
-        trainable=trainable,
-        name='Embedding-Segment',
-    )(inputs[1])
+    x0 = input_tensor
+    for i in range(transformer_num):
+        name = 'Encoder-%d' % (i + 1)
+        attention_name = '%s-MultiHeadSelfAttention' % name
+        feed_forward_name = '%s-FeedForward' % name
 
-    embed_layer = keras.layers.Add(
-        name='Embedding-Token-Segment'
-    )([tokenembedding, segmentembedding])
+        # attention
+        x = MultiHeadAttention(
+            head_num=head_num,
+            name=attention_name,
+            attention_prob_dropout_rate=dropout_rate
+        )(x0)
+        x = keras.layers.Dropout(
+            rate=dropout_rate,
+            name='%s-Dropout' % attention_name
+        )(x)
+        x = keras.layers.Add(name='%s-Add' % attention_name)([x0, x])
+        x = LayerNormalization(name='%s-Norm' % attention_name)(x)
 
-    embed_layer = PositionEmbedding(
-        max_pos_num=pos_num,
-        name='Embedding-Position',
-    )(embed_layer)
-    return embed_layer, embed_weights
+        # feedforward
+        x0 = x
+        x = FeedForward(
+            units=intermediate_size,
+            activation=feed_forward_activation,
+            name=feed_forward_name
+        )(x0)
+        x = keras.layers.Dropout(
+            rate=dropout_rate,
+            name='%s-Dropout' % feed_forward_name
+        )(x)
+        x = keras.layers.Add(name='%s-Add' % feed_forward_name)([x0, x])
+        x = LayerNormalization(name='%s-Norm' % feed_forward_name)(x)
+        x0 = x
+    return x0
 
 
-def get_model(
-        vocab_size=21128, max_position_embeddings=512, seq_len=None, hidden_size=768,
-        num_hidden_layers=12, num_attention_heads=12, intermediate_size=3072,
-        dropout_rate=0.1, hidden_act='gelu',
+def get_bert_model(
+        vocab_size=21128, max_position_embeddings=512, seq_len=None,
+        hidden_size=768, num_hidden_layers=12, num_attention_heads=12,
+        intermediate_size=3072, dropout_rate=0.1, hidden_act='gelu',
         trainable=True, mode='finetune', **kwargs):
     """Get BERT model.
 
@@ -270,22 +229,28 @@ def get_model(
     if hidden_act == 'gelu':
         hidden_act = gelu
 
-    inputs = [keras.layers.Input(shape=(seq_len,), name='Input-%s' % name)
+    inputs = [keras.layers.Input(shape=(seq_len,), name='Input-%s'%name)
               for name in ['Token', 'Segment', 'Masked']]
 
-    x, embed_weights = get_embedding(
-        inputs, token_num=vocab_size, embed_dim=hidden_size,
-        pos_num=max_position_embeddings)
+    # embedding
+    x_token, embed_weights = TokenEmbedding(
+        vocab_size, hidden_size,
+        mask_zero=True, name='Embedding-Token')(inputs[0])
+    x_seg = keras.layers.Embedding(
+        2, hidden_size, name='Embedding-Segment')(inputs[1])
+    x = keras.layers.Add(name='Embedding-Token-Segment')([x_token, x_seg])
+    x = PositionEmbedding(
+        max_pos_num=max_position_embeddings,
+        name='Embedding-Position')(x)
 
     x = keras.layers.Dropout(
         rate=dropout_rate, name='Embedding-Dropout')(x)
-
     x = LayerNormalization(
         trainable=trainable, name='Embedding-Norm')(x)
 
-    x = get_encoders(
-        input_layer=x,
-        encoder_num=num_hidden_layers,
+    x = get_transformers(
+        input_tensor=x,
+        transformer_num=num_hidden_layers,
         head_num=num_attention_heads,
         intermediate_size=intermediate_size,
         feed_forward_activation=hidden_act,
@@ -343,19 +308,7 @@ def build_pretrained_model(
     config['mode'] = mode
     config['seq_len'] = seq_len
     config['dropout_rate'] = config.get('hidden_dropout_prob', 0.)
-    model = get_model(**config)
-    # model = get_model(
-    #     vocab_size=config['vocab_size'],
-    #     max_position_embeddings=config['max_position_embeddings'],
-    #     seq_len=seq_len,
-    #     hidden_size=config['hidden_size'],
-    #     num_hidden_layers=config['num_hidden_layers'],
-    #     num_attention_heads=config['num_attention_heads'],
-    #     intermediate_size=config['intermediate_size'],
-    #     dropout_rate=config['hidden_dropout_prob'],
-    #     hidden_act=config['hidden_act'],
-    #     trainable=trainable,
-    #     mode=mode)
+    model = get_bert_model(**config)
 
     if checkpoint_file:
         load_from_ckpt(model, config, checkpoint_file, mode=mode)
