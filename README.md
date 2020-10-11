@@ -10,6 +10,6 @@
 
 3、优化Bert预训练参数加载的速度，比keras_bert快4倍，比bert4keras快20%
      
-
-### 即将更新以下几点：   
-1、可以传入input_mask，支持attention_mask（keras_bert和bert4keras均不支持）  
+4、提供支持分层学习率的优化器实现，包括“两段式分层学习率优化器”、
+“三段式分层学习率优化器”、“逐层衰减学习率优化器”，
+此外还支持weight decay参数设置，还支持梯度累积优化器（在内存不足时，增大batch size的方法）
