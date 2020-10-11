@@ -52,7 +52,7 @@ def do_use_weight_decay(param_name, exclude_from_weight_decay):
     return True
 
 
-class keras_Adam_2lr(BaseOptimizer):
+class KerasAdam2lr(BaseOptimizer):
     """支持2段式学习率的Adam optimizer.
     # Arguments
         final_layers: list of final layers' weights (layers close to output layer, including output layer)
@@ -69,7 +69,7 @@ class keras_Adam_2lr(BaseOptimizer):
                  weight_decay=0, # 0.01
                  exclude_from_weight_decay=("LayerNorm", "layer_norm", "bias"),
                  amsgrad=False, **kwargs):
-        super(keras_Adam_2lr, self).__init__(**kwargs)
+        super(KerasAdam2lr, self).__init__(**kwargs)
 
         keras_mode_hint()
         if weight_decay > 0:
@@ -150,7 +150,7 @@ class keras_Adam_2lr(BaseOptimizer):
             'beta_2': float(K.get_value(self.beta_2)),
             'weight_decay': self.weight_decay,
             'amsgrad': self.amsgrad}
-        base_config = super(keras_Adam_2lr, self).get_config()
+        base_config = super(KerasAdam2lr, self).get_config()
         return dict(list(base_config.items()) + list(config.items()))
 
     @staticmethod
@@ -158,7 +158,7 @@ class keras_Adam_2lr(BaseOptimizer):
         return get_weights_by_layernames(model, layernames, use_tfkeras=False)
 
 
-class keras_Adam_3lr(BaseOptimizer):
+class KerasAdam3lr(BaseOptimizer):
     """支持3段式学习率的Adam optimizer.
     # Arguments
         middle_layers: list of middle layers' weights
@@ -177,7 +177,7 @@ class keras_Adam_3lr(BaseOptimizer):
                  weight_decay=0,  # 0.01
                  exclude_from_weight_decay=("LayerNorm", "layer_norm", "bias"),
                  amsgrad=False, **kwargs):
-        super(keras_Adam_3lr, self).__init__(**kwargs)
+        super(KerasAdam3lr, self).__init__(**kwargs)
 
         keras_mode_hint()
         if weight_decay > 0:
@@ -262,7 +262,7 @@ class keras_Adam_3lr(BaseOptimizer):
             'beta_2': float(K.get_value(self.beta_2)),
             'weight_decay': self.weight_decay,
             'amsgrad': self.amsgrad}
-        base_config = super(keras_Adam_3lr, self).get_config()
+        base_config = super(KerasAdam3lr, self).get_config()
         return dict(list(base_config.items()) + list(config.items()))
 
     @staticmethod
@@ -270,7 +270,7 @@ class keras_Adam_3lr(BaseOptimizer):
         return get_weights_by_layernames(model, layernames, use_tfkeras=False)
 
 
-class keras_Adam_lr_decay(BaseOptimizer):
+class KerasAdamLrDecay(BaseOptimizer):
     """Adam optimizer that supports layer-wise-decayed learning rate.
        Layer-wise-decayed learning rate means that the learning rate decays
             by the same power from output-layer to input-layer.
@@ -297,7 +297,7 @@ class keras_Adam_lr_decay(BaseOptimizer):
                  weight_decay=0,  # 0.01
                  exclude_from_weight_decay=("LayerNorm", "layer_norm", "bias"),
                  amsgrad=False, **kwargs):
-        super(keras_Adam_lr_decay, self).__init__(**kwargs)
+        super(KerasAdamLrDecay, self).__init__(**kwargs)
 
         keras_mode_hint()
         if weight_decay > 0:
@@ -381,7 +381,7 @@ class keras_Adam_lr_decay(BaseOptimizer):
             'beta_2': float(K.get_value(self.beta_2)),
             'weight_decay': self.weight_decay,
             'amsgrad': self.amsgrad}
-        base_config = super(keras_Adam_lr_decay, self).get_config()
+        base_config = super(KerasAdamLrDecay, self).get_config()
         return dict(list(base_config.items()) + list(config.items()))
 
     @staticmethod

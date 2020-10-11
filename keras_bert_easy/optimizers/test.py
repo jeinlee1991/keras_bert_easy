@@ -37,7 +37,7 @@ def test_keras_Adam_2lr(use_accum_opt=False):
     print('final_layers_weights: ', [item.name for item in final_layers_weights])
 
     # train
-    optimizer = layerwiseLR.keras_Adam_2lr(
+    optimizer = layerwiseLR.KerasAdam2lr(
         final_layers=final_layers_weights,
         lr=(1e-3, 1e-2),  # early_layers, final_layers 学习率分别设为 1e-3, 1e-2
         weight_decay=0.01,
@@ -90,7 +90,7 @@ def test_keras_Adam_3lr(use_accum_opt=False):
     print('final_layers_weights: ', [item.name for item in final_layers_weights])
 
     # train
-    optimizer = layerwiseLR.keras_Adam_3lr(
+    optimizer = layerwiseLR.KerasAdam3lr(
         middle_layers=middle_layers_weights,
         final_layers=final_layers_weights,
         lr=(1e-3, 1e-2, 1e-1),  # early_layers, middle_layers, final_layers 学习率分别设为 1e-3, 1e-2, 1e-1
@@ -130,10 +130,10 @@ def test_keras_Adam_lr_decay(use_accum_opt=False):
     # model.summary()
 
     n_layers = len(model.layers)
-    weight_name_to_layer_depth = layerwiseLR.keras_Adam_lr_decay.build_dict_layer_depth(model)
+    weight_name_to_layer_depth = layerwiseLR.KerasAdamLrDecay.build_dict_layer_depth(model)
 
     # train
-    optimizer = layerwiseLR.keras_Adam_lr_decay(
+    optimizer = layerwiseLR.KerasAdamLrDecay(
         weight_name_to_layer_depth=weight_name_to_layer_depth,
         n_layers=n_layers,
         layerwise_lr_decay_power=0.8,  # 学习率逐层衰减的权重
@@ -157,7 +157,7 @@ def test_keras_Adam_lr_decay(use_accum_opt=False):
 
 
 if __name__=='__main__':
-    test_keras_Adam_2lr(use_accum_opt=True)
+    # test_keras_Adam_2lr(use_accum_opt=True)
     # test_keras_Adam_3lr(use_accum_opt=True)
-    # test_keras_Adam_lr_decay(use_accum_opt=True)
+    test_keras_Adam_lr_decay(use_accum_opt=True)
 
